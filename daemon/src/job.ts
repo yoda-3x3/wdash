@@ -36,6 +36,8 @@ type WorkerState = {
   lastChecks?: { sha: string; results: CheckResult[] };
   approved: boolean;
   idleNudges: number;
+  /** Reported done with passing checks and waiting on the orchestrator's review: don't nudge it. */
+  awaitingReview?: boolean;
 };
 
 const ORCH = "orchestrator";
@@ -53,6 +55,7 @@ export class JobRunner implements AgentHost, TeamApi {
   private timers: NodeJS.Timeout[] = [];
   private cmdConn: Redis;
   private stopped = false;
+  private finishing = false;
   private lastCheckpointAt = 0;
   private budgetWarned = false;
   private stallRaised = new Set<string>();
@@ -439,7 +442,7 @@ export class JobRunner implements AgentHost, TeamApi {
 
     if (agent.rec.role === "worker") {
       const ws = this.workers.get(agent.id);
-      if (ws && !ws.approved && agent.rec.status === "idle") {
+      if (ws && !ws.approved && !ws.awaitingReview && agent.rec.status === "idle") {
         // A worker that stops without reporting done gets one automatic nudge, then the orchestrator decides.
         if (ws.idleNudges < 1) {
           ws.idleNudges++;
@@ -455,7 +458,7 @@ export class JobRunner implements AgentHost, TeamApi {
   /** The job is stuck on the user if the orchestrator is idle and nobody else is working. */
   private async checkWaitingForUser(result?: SDKResultMessage): Promise<void> {
     const orch = this.agents.get(ORCH);
-    if (!orch || orch.rec.status !== "idle" || this.pendingPlan) return;
+    if (!orch || orch.rec.status !== "idle" || this.pendingPlan || this.finishing || this.stopped) return;
     const others = [...this.agents.values()].filter((a) => a.id !== ORCH);
     const activeWorker = others.some((a) => ["running", "starting", "reviewing", "waiting_on_approval", "waiting_on_user"].includes(a.rec.status));
     if (activeWorker || this.pending.size) return;
@@ -608,6 +611,7 @@ export class JobRunner implements AgentHost, TeamApi {
     ws.lastChecks = { sha, results };
     const passed = checksPass(results);
     ws.failedChecks = passed ? 0 : ws.failedChecks + 1;
+    ws.awaitingReview = passed;
     await this.emitChecks(fromId, results, "worker");
     if (!passed && ws.failedChecks >= 2) {
       await this.notify("checks_failing", { agentId: fromId, detail: checksSummary(results) });
@@ -643,6 +647,7 @@ export class JobRunner implements AgentHost, TeamApi {
       return `Review cap (${this.job.reviewCap}) reached. The user has been asked to accept, guide, or cancel. Don't review ${agentId} again until you hear back.`;
     }
     ws.idleNudges = 0;
+    ws.awaitingReview = false;
     await a.setStatus("running");
     a.send(`[review round ${ws.rounds}/${this.job.reviewCap}] The orchestrator requests changes:\n${notes}\n\nFix them and call board_report_done again.`);
     return `Sent back to ${agentId} (round ${ws.rounds}/${this.job.reviewCap}).`;
@@ -704,6 +709,8 @@ export class JobRunner implements AgentHost, TeamApi {
     if (!this.finalChecks || this.finalChecks.sha !== sha) throw new Error("Run job_final_check on the current job branch first.");
     if (!checksPass(this.finalChecks.results)) throw new Error(`Final checks failing: ${checksSummary(this.finalChecks.results)}`);
     // Finish asynchronously so this tool call can return to the model before agents are stopped.
+    // Until then the orchestrator's turn end must not mark the job as waiting on the user.
+    this.finishing = true;
     setTimeout(() => void this.complete(summary).catch((e) => this.fail(`Finishing failed: ${(e as Error).message}`)), 50);
     return "Finishing the job. Thanks — you can stop now.";
   }
