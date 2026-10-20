@@ -37,9 +37,15 @@ export const authOptions: AuthOptions = {
 };
 
 export async function currentLogin(): Promise<string | null> {
-  const s = await getServerSession(authOptions);
-  const login = (s as { login?: string } | null)?.login;
-  return login && login === allowedLogin() ? login : null;
+  try {
+    const s = await getServerSession(authOptions);
+    const login = (s as { login?: string } | null)?.login;
+    return login && login === allowedLogin() ? login : null;
+  } catch (e) {
+    // Misconfiguration (e.g. ALLOWED_GITHUB_LOGIN unset) must fail closed, not 500.
+    console.error("auth:", (e as Error).message);
+    return null;
+  }
 }
 
 /** For API routes: returns a 401 response if not signed in as the allowed user. */
