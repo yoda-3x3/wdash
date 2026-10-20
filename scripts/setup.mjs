@@ -32,8 +32,9 @@ rl._writeToOutput = (s) => {
 
 function ask(q, { def, secret = false } = {}) {
   return new Promise((resolve) => {
-    const shown = def ? (secret ? " [keep current]" : ` [${def}]`) : "";
-    stdout.write(`${q}${shown}: `);
+    const shown = def ? (secret ? " [Enter = keep current]" : ` [Enter = ${def}]`) : "";
+    // Question on its own line: some terminals don't draw a line until it ends.
+    stdout.write(`\n${q}${shown}${secret ? " (hidden as you type)" : ""}\n> `);
     muted = secret;
     rl.question("", (a) => {
       muted = false;
@@ -57,7 +58,7 @@ async function need(key, q, opts = {}) {
 }
 
 function sh(cmd, args, input) {
-  const r = spawnSync(cmd, args, { input, encoding: "utf8", shell: win, stdio: input === undefined ? ["inherit", "pipe", "pipe"] : ["pipe", "pipe", "pipe"] });
+  const r = spawnSync(cmd, args, { input, encoding: "utf8", shell: win, windowsHide: true, stdio: input === undefined ? ["inherit", "pipe", "pipe"] : ["pipe", "pipe", "pipe"] });
   return { ok: r.status === 0, out: (r.stdout ?? "").trim(), err: (r.stderr ?? "").trim() };
 }
 

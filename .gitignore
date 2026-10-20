@@ -10,3 +10,6 @@ daemon/.state/
 *.tsbuildinfo
 .vercel/
 .wdash-setup.json
+
+.vercel
+.env*
