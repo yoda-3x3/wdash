@@ -7,6 +7,8 @@ import {
   Approval,
   JobRecord,
   ProjectConfig,
+  ProjectRequest,
+  type NewProjectInput,
   RateLimitInfo,
   WdEvent,
   Attachment,
@@ -82,6 +84,8 @@ export async function createJob(input: NewJobInput, project: ProjectConfig): Pro
     title,
     status: "queued",
     location: "queued",
+    kind: input.kind,
+    chatModel: input.chatModel,
     runOn: input.runOn,
     models: input.models,
     workers: input.workers,
@@ -241,4 +245,23 @@ export async function attachUploads(jobId: string, uploadIds: string[]): Promise
 export async function getFileData(jobId: string, fileId: string): Promise<Buffer | undefined> {
   const v = await redis().hget<string>(K.fileData(jobId), fileId);
   return v ? Buffer.from(v, "base64") : undefined;
+}
+
+// ---------------------------------------------------------------- new projects
+
+/** Queues a "create project" request for the home daemon, which does the GitHub side with gh. */
+export async function createProjectRequest(input: NewProjectInput): Promise<ProjectRequest> {
+  const now = Date.now();
+  const req: ProjectRequest = { id: newId("p"), input, status: "pending", createdAt: now, updatedAt: now };
+  const r = redis();
+  await r.set(K.projectRequest(req.id), JSON.stringify(req), { ex: 24 * 60 * 60 });
+  await r.rpush(K.projectQueue, req.id);
+  return req;
+}
+
+export async function getProjectRequest(id: string): Promise<ProjectRequest | undefined> {
+  const v = await redis().get<string>(K.projectRequest(id));
+  if (!v) return undefined;
+  const p = ProjectRequest.safeParse(JSON.parse(v));
+  return p.success ? p.data : undefined;
 }

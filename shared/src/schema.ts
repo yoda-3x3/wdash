@@ -59,6 +59,16 @@ export const MODEL_PRESETS: Record<ModelPreset, { orchestrator: string; worker: 
   "sonnet-haiku": { orchestrator: "sonnet", worker: "haiku", label: "Sonnet orchestrator + Haiku workers" },
 };
 
+/** "team": orchestrator + workers + review. "chat": one agent you talk to directly in the project's repo. */
+export const JobKind = z.enum(["team", "chat"]);
+export type JobKind = z.infer<typeof JobKind>;
+
+export const ChatModel = z.enum(["opus", "sonnet", "haiku"]);
+export type ChatModel = z.infer<typeof ChatModel>;
+
+/** Agent id of a chat job's single agent. */
+export const CHAT_AGENT = "claude";
+
 const num = z.coerce.number();
 const bool = z.preprocess((v) => v === true || v === "true" || v === "1", z.boolean());
 
@@ -69,6 +79,8 @@ export const JobRecord = z.object({
   title: z.string(),
   status: JobStatus,
   location: JobLocation,
+  kind: JobKind.default("team"),
+  chatModel: ChatModel.default("sonnet"),
   runOn: RunOn.default("auto"),
   models: ModelPreset.default("opus-sonnet"),
   workers: z.string().default("auto"), // "auto" | "1".."4"
@@ -128,6 +140,8 @@ export function uniqueFileName(name: string, taken: Set<string>): string {
 export const NewJobInput = z.object({
   project: z.string().min(1),
   task: z.string().min(1).max(20_000),
+  kind: JobKind.default("team"),
+  chatModel: ChatModel.default("sonnet"),
   runOn: RunOn.default("auto"),
   models: ModelPreset.default("opus-sonnet"),
   workers: z.enum(["auto", "1", "2", "3", "4"]).default("auto"),
@@ -140,7 +154,7 @@ export type NewJobInput = z.infer<typeof NewJobInput>;
 
 // ---------- Agents ----------
 
-export const AgentRole = z.enum(["orchestrator", "worker"]);
+export const AgentRole = z.enum(["orchestrator", "worker", "chat"]);
 export const AgentStatus = z.enum([
   "starting",
   "running",
@@ -238,8 +252,36 @@ export const Command = z.discriminatedUnion("type", [
   z.object({ type: z.literal("nudge"), agentId: z.string(), text: z.string().max(2000).optional() }),
   z.object({ type: z.literal("accept_review"), agentId: z.string() }),
   z.object({ type: z.literal("guidance"), agentId: z.string(), text: z.string().min(1).max(10_000) }),
+  /** Chat jobs: commit the agent's changes and merge them like a finished job. */
+  z.object({ type: z.literal("finish_chat") }),
 ]);
 export type Command = z.infer<typeof Command>;
+
+// ---------- New projects (web -> home daemon) ----------
+
+export const NewProjectInput = z.object({
+  name: z
+    .string()
+    .min(1)
+    .max(80)
+    .regex(/^[A-Za-z0-9._-]+$/, "Use letters, digits, '.', '_' or '-'")
+    .refine((n) => !n.startsWith("."), "Can't start with '.'"),
+  description: z.string().max(300).optional(),
+  testCommand: z.string().max(300).optional(),
+  buildCommand: z.string().max(300).optional(),
+});
+export type NewProjectInput = z.infer<typeof NewProjectInput>;
+
+export const ProjectRequest = z.object({
+  id: z.string(),
+  input: NewProjectInput,
+  status: z.enum(["pending", "creating", "done", "failed"]),
+  error: z.string().optional(),
+  project: z.string().optional(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type ProjectRequest = z.infer<typeof ProjectRequest>;
 
 // ---------- Approvals ----------
 

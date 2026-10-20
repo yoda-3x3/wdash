@@ -30,6 +30,13 @@ test("edits need ownership", () => {
   assert.equal(decide("Edit", { file_path: join(root, "..", "w2", "src/solver/x.ts") }, ctx).kind, "deny");
 });
 
+test("a chat agent may edit anywhere in its worktree, but not outside it", () => {
+  const chat: PolicyContext = { ...ctx, role: "chat", agentId: "claude", owned: ["**"], claims: { "**": "claude" } };
+  assert.equal(decide("Edit", { file_path: join(root, "src/viz/y.ts") }, chat).kind, "allow");
+  assert.equal(decide("Write", { file_path: join(root, ".github/workflows/ci.yml") }, chat).kind, "allow");
+  assert.equal(decide("Edit", { file_path: join(root, "..", "w2", "a.ts") }, chat).kind, "deny");
+});
+
 test("orchestrator never edits", () => {
   assert.equal(decide("Edit", { file_path: join(root, "src/solver/x.ts") }, { ...ctx, role: "orchestrator" }).kind, "deny");
 });

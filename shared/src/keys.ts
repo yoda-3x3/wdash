@@ -24,6 +24,8 @@ export const K = {
   sessionIndex: (projectKey: string) => `wd:sessidx:${projectKey}`, // ZSET sessionId -> mtime
   sessionSubkeys: (projectKey: string, sessionId: string) => `wd:sesssub:${projectKey}:${sessionId}`, // SET
   homeQueue: "wd:queue:home", // LIST of job ids for the home daemon
+  projectQueue: "wd:queue:projects", // LIST of ProjectRequest ids for the home daemon
+  projectRequest: (id: string) => `wd:projreq:${id}`, // STRING EX 1 day: ProjectRequest JSON
   homeHeartbeat: "wd:daemon:home:heartbeat",
   cloudHeartbeat: (id: string) => `wd:daemon:cloud:${id}:heartbeat`,
   projects: "wd:projects", // HASH name -> ProjectConfig JSON (published by home daemon)

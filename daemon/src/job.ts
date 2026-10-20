@@ -4,6 +4,7 @@ import type { SDKResultMessage, McpSdkServerConfigWithInstance } from "@anthropi
 import type { Redis } from "ioredis";
 import {
   ATTACHMENTS_DIR,
+  CHAT_AGENT,
   K,
   MODEL_PRESETS,
   TERMINAL_STATUSES,
@@ -18,13 +19,13 @@ import {
   type AttentionReason,
 } from "@wdash/shared";
 import { AgentRunner, type AgentHost, type ApprovalOutcome } from "./agent.js";
-import { orchestratorServer, workerServer, type PlannedWorker, type TeamApi } from "./board.js";
+import { chatServer, orchestratorServer, workerServer, type PlannedWorker, type TeamApi } from "./board.js";
 import { runChecks, type CheckResult } from "./checks.js";
 import { env } from "./config.js";
 import * as G from "./git.js";
 import { clear, clearJob, raise } from "./notify.js";
 import { conflictingClaims, globsOverlap, type PolicyContext } from "./permissions.js";
-import { orchestratorPrompt, workerPrompt } from "./prompts.js";
+import { chatPrompt, orchestratorPrompt, workerPrompt } from "./prompts.js";
 import type { Relay } from "./relay.js";
 
 export type Mode = "home" | "cloud";
@@ -78,6 +79,11 @@ export class JobRunner implements AgentHost, TeamApi {
     this.cmdConn = relay.newBlockingConnection();
   }
 
+  /** The agent the user talks to by default: the orchestrator, or a chat job's single agent. */
+  private get lead(): string {
+    return this.job?.kind === "chat" ? CHAT_AGENT : ORCH;
+  }
+
   private get stateDir(): string {
     return join(env().WDASH_STATE_DIR, "jobs", this.jobId);
   }
@@ -107,6 +113,7 @@ export class JobRunner implements AgentHost, TeamApi {
       await this.prepareMain();
       const existing = await this.relay.getAgents(this.jobId);
       if (existing.length) await this.resumeAgents(existing);
+      else if (this.job.kind === "chat") await this.startChat();
       else await this.startOrchestrator();
 
       this.startTimers();
@@ -134,7 +141,7 @@ export class JobRunner implements AgentHost, TeamApi {
     const preset = MODEL_PRESETS[this.job.models];
     await this.relay.setStatus(this.jobId, "planning");
     const rec: AgentRecord = {
-      id: ORCH,
+      id: this.lead,
       role: "orchestrator",
       model: preset.orchestrator,
       name: "orchestrator",
@@ -153,6 +160,45 @@ export class JobRunner implements AgentHost, TeamApi {
     runner.start(`# Task from the user\n\n${this.job.task}${attached}\n\nStart by exploring the repo, then submit a plan with team_plan.`);
   }
 
+  private async startChat(): Promise<void> {
+    await this.relay.setStatus(this.jobId, "running");
+    const rec: AgentRecord = {
+      id: CHAT_AGENT,
+      role: "chat",
+      model: this.job.chatModel,
+      name: CHAT_AGENT,
+      task: this.job.task,
+      globs: ["**"],
+      status: "starting",
+      reviewRounds: 0,
+      lastEventAt: Date.now(),
+      costUsd: 0,
+      branch: branchFor.main(this.jobId),
+    };
+    await this.relay.setClaims(this.jobId, CHAT_AGENT, ["**"]);
+    const runner = this.makeRunner(rec, this.mainWt, chatPrompt(this.job, this.project));
+    await runner.save();
+    const files = (await this.relay.listFiles(this.jobId)).map((f) => f.name);
+    const attached = files.length ? `\n\n[wdash] The user attached: ${files.join(", ")} (in ${ATTACHMENTS_DIR}/).` : "";
+    runner.start(`[user] ${this.job.task}${attached}`);
+  }
+
+  /** Chat jobs end when the user says so: commit what the agent changed and merge it like a finished job. */
+  private async finishChat(): Promise<void> {
+    if (this.job.kind !== "chat" || this.finishing) return;
+    this.finishing = true;
+    await this.agents.get(CHAT_AGENT)?.stop("done");
+    const sha = await G.checkpointCommit(this.mainWt, "wdash: chat changes");
+    const base = await G.baseRef(this.repoDir, this.project.baseBranch, this.mode);
+    const d = await G.diffAgainst(this.mainWt, base);
+    if (d.files.length) {
+      await this.relay.emit({ jobId: this.jobId, agentId: CHAT_AGENT, type: "diff", payload: { branch: branchFor.main(this.jobId), files: d.files, stat: d.stat, patch: d.patch, combined: true } });
+    }
+    await G.pushBranches(this.repoDir, [branchFor.main(this.jobId)]).catch(() => undefined);
+    const summary = d.files.length ? `Chat finished. Changed ${d.files.length} file(s).${sha ? "" : " (No new edits since the last checkpoint.)"}` : "Chat finished. No file changes.";
+    await this.complete(summary);
+  }
+
   private async resumeAgents(recs: AgentRecord[]): Promise<void> {
     const where = this.mode === "cloud" ? "a cloud runner (the home PC went offline)" : "the home PC";
     for (const rec of recs) {
@@ -169,7 +215,8 @@ export class JobRunner implements AgentHost, TeamApi {
         await this.syncAttachments(cwd);
         this.workers.set(rec.id, { rounds: rec.reviewRounds, failedChecks: 0, approved: false, idleNudges: 0 });
       }
-      const prompt = rec.role === "orchestrator" ? orchestratorPrompt(this.job, this.project) : workerPrompt(this.job, this.project, rec);
+      const prompt =
+        rec.role === "orchestrator" ? orchestratorPrompt(this.job, this.project) : rec.role === "chat" ? chatPrompt(this.job, this.project) : workerPrompt(this.job, this.project, rec);
       const runner = this.makeRunner(rec, cwd, prompt);
       runner.start(
         `[wdash] This job was resumed on ${where} from the last checkpoint (${this.job.lastCheckpointSha ?? "start"}). ` +
@@ -270,7 +317,7 @@ export class JobRunner implements AgentHost, TeamApi {
   private async handleCommand(cmd: Command): Promise<void> {
     switch (cmd.type) {
       case "user_message": {
-        const target = this.agents.get(cmd.agentId ?? ORCH) ?? this.agents.get(ORCH);
+        const target = this.agents.get(cmd.agentId ?? this.lead) ?? this.agents.get(this.lead);
         if (!target) return;
         await this.relay.emit({ jobId: this.jobId, agentId: target.id, type: "message", payload: { role: "user", text: cmd.text } });
         await clear(this.relay, this.jobId, "waiting_for_input", target.id);
@@ -300,20 +347,24 @@ export class JobRunner implements AgentHost, TeamApi {
         await clear(this.relay, this.jobId, "plan_approval");
         if (cmd.edits?.trim()) {
           await this.relay.setStatus(this.jobId, "planning");
-          this.agents.get(ORCH)?.send(`[user] The user edited your plan:\n${cmd.edits}\n\nRevise it and call team_plan again.`);
+          this.agents.get(this.lead)?.send(`[user] The user edited your plan:\n${cmd.edits}\n\nRevise it and call team_plan again.`);
           this.pendingPlan = undefined;
           return;
         }
         const plan = this.pendingPlan;
         this.pendingPlan = undefined;
         await this.launchPlan(plan.workers);
-        this.agents.get(ORCH)?.send("[wdash] The user approved your plan. Workers are starting now.");
+        this.agents.get(this.lead)?.send("[wdash] The user approved your plan. Workers are starting now.");
         return;
       }
       case "cancel": {
         await this.relay.setStatus(this.jobId, "cancelled");
         await clearJob(this.relay, this.jobId);
         await this.end("cancelled");
+        return;
+      }
+      case "finish_chat": {
+        await this.finishChat();
         return;
       }
       case "pause": {
@@ -361,7 +412,7 @@ export class JobRunner implements AgentHost, TeamApi {
         await clear(this.relay, this.jobId, "review_cap", cmd.agentId);
         await clear(this.relay, this.jobId, "checks_failing", cmd.agentId);
         const msg = await this.mergeWorker(cmd.agentId, true);
-        this.agents.get(ORCH)?.send(`[user] The user accepted ${cmd.agentId}'s work as-is. ${msg}`);
+        this.agents.get(this.lead)?.send(`[user] The user accepted ${cmd.agentId}'s work as-is. ${msg}`);
         return;
       }
       case "guidance": {
@@ -372,7 +423,7 @@ export class JobRunner implements AgentHost, TeamApi {
         await clear(this.relay, this.jobId, "review_cap", cmd.agentId);
         await clear(this.relay, this.jobId, "checks_failing", cmd.agentId);
         a?.send(`[user guidance] ${cmd.text}`);
-        this.agents.get(ORCH)?.send(`[wdash] The user gave ${cmd.agentId} guidance: ${cmd.text}`);
+        this.agents.get(this.lead)?.send(`[wdash] The user gave ${cmd.agentId} guidance: ${cmd.text}`);
         return;
       }
     }
@@ -462,7 +513,7 @@ export class JobRunner implements AgentHost, TeamApi {
           ws.idleNudges++;
           agent.send("[wdash] You ended your turn without calling board_report_done. If you're finished, report done; if you're blocked, message the orchestrator with board_post.");
         } else {
-          this.agents.get(ORCH)?.send(`[wdash] Worker ${agent.id} stopped without reporting done. Its last message: ${truncate(resultText(result), 1500)}`);
+          this.agents.get(this.lead)?.send(`[wdash] Worker ${agent.id} stopped without reporting done. Its last message: ${truncate(resultText(result), 1500)}`);
         }
       }
     }
@@ -471,16 +522,16 @@ export class JobRunner implements AgentHost, TeamApi {
 
   /** The job is stuck on the user if the orchestrator is idle and nobody else is working. */
   private async checkWaitingForUser(result?: SDKResultMessage): Promise<void> {
-    const orch = this.agents.get(ORCH);
+    const orch = this.agents.get(this.lead);
     if (!orch || orch.rec.status !== "idle" || this.pendingPlan || this.finishing || this.stopped) return;
-    const others = [...this.agents.values()].filter((a) => a.id !== ORCH);
+    const others = [...this.agents.values()].filter((a) => a.id !== this.lead);
     const activeWorker = others.some((a) => ["running", "starting", "reviewing", "waiting_on_approval", "waiting_on_user"].includes(a.rec.status));
     if (activeWorker || this.pending.size) return;
     if (TERMINAL_STATUSES.includes(this.job.status)) return;
     await this.relay.setStatus(this.jobId, "waiting_on_user");
     this.job.status = "waiting_on_user";
     await this.notify("waiting_for_input", {
-      agentId: ORCH,
+      agentId: this.lead,
       detail: result ? truncate(resultText(result), 600) : "The orchestrator stopped and nothing else is running.",
     });
   }
@@ -508,6 +559,7 @@ export class JobRunner implements AgentHost, TeamApi {
   }
 
   mcpServer(agent: AgentRunner): McpSdkServerConfigWithInstance {
+    if (agent.rec.role === "chat") return chatServer();
     return agent.rec.role === "orchestrator" ? orchestratorServer(this, agent.id) : workerServer(this, agent.id);
   }
 
@@ -541,12 +593,12 @@ export class JobRunner implements AgentHost, TeamApi {
           for (const b of workers[j]!.globs)
             if (globsOverlap(a, b)) throw new Error(`Ownership overlaps: ${workers[i]!.name}:${a} vs ${workers[j]!.name}:${b}. Make the globs disjoint.`);
 
-    await this.relay.emit({ jobId: this.jobId, agentId: ORCH, type: "plan", payload: { summary, workers } });
+    await this.relay.emit({ jobId: this.jobId, agentId: this.lead, type: "plan", payload: { summary, workers } });
     if (workers.length >= 3) {
       this.pendingPlan = { summary, workers };
       await this.relay.setStatus(this.jobId, "awaiting_plan_approval");
       const detail = `${summary}\n\n${workers.map((w) => `• ${w.name} — ${w.globs.join(", ")}`).join("\n")}`;
-      await this.notify("plan_approval", { agentId: ORCH, detail: truncate(detail, 800) });
+      await this.notify("plan_approval", { agentId: this.lead, detail: truncate(detail, 800) });
       return "Plan submitted. It has 3+ workers, so it waits for the user's approval. End your turn now; you'll get a message when it's approved or edited.";
     }
     await this.launchPlan(workers);
@@ -610,8 +662,8 @@ export class JobRunner implements AgentHost, TeamApi {
     const claims = await this.relay.getClaims(this.jobId);
     const conflicts = conflictingClaims(claims, globs, fromId);
     const note = conflicts.length ? ` Note: overlaps existing claims: ${conflicts.join("; ")}.` : "";
-    this.agents.get(ORCH)?.send(`[board] from ${fromId}: requests files ${globs.join(", ")} — ${reason}.${note} Use board_grant_files or board_deny_files.`);
-    await this.relay.emit({ jobId: this.jobId, agentId: fromId, type: "board", payload: { from: fromId, to: ORCH, text: `Requests files ${globs.join(", ")}: ${reason}` } });
+    this.agents.get(this.lead)?.send(`[board] from ${fromId}: requests files ${globs.join(", ")} — ${reason}.${note} Use board_grant_files or board_deny_files.`);
+    await this.relay.emit({ jobId: this.jobId, agentId: fromId, type: "board", payload: { from: fromId, to: this.lead, text: `Requests files ${globs.join(", ")}: ${reason}` } });
     return "Request sent to the orchestrator. Work on something else or end your turn until you hear back.";
   }
 
@@ -631,7 +683,7 @@ export class JobRunner implements AgentHost, TeamApi {
     if (!passed && ws.failedChecks >= 2) {
       await this.notify("checks_failing", { agentId: fromId, detail: checksSummary(results) });
     }
-    this.agents.get(ORCH)?.send(
+    this.agents.get(this.lead)?.send(
       `[board] ${fromId} reports done: ${summary}\nChecks at ${sha.slice(0, 8)}: ${checksSummary(results)}\nReview with review_diff, then board_approve or board_request_changes.`,
     );
     return passed
@@ -710,9 +762,9 @@ export class JobRunner implements AgentHost, TeamApi {
     const results = await runChecks(this.project, this.mainWt, this.stateDir);
     const sha = await G.head(this.mainWt);
     this.finalChecks = { sha, results };
-    await this.emitChecks(ORCH, results, "final");
+    await this.emitChecks(this.lead, results, "final");
     const d = await G.diffAgainst(this.mainWt, await G.baseRef(this.repoDir, this.project.baseBranch, this.mode));
-    await this.relay.emit({ jobId: this.jobId, agentId: ORCH, type: "diff", payload: { branch: branchFor.main(this.jobId), files: d.files, stat: d.stat, patch: d.patch, combined: true } });
+    await this.relay.emit({ jobId: this.jobId, agentId: this.lead, type: "diff", payload: { branch: branchFor.main(this.jobId), files: d.files, stat: d.stat, patch: d.patch, combined: true } });
     await this.relay.setStatus(this.jobId, "running");
     return `Final checks at ${sha.slice(0, 8)}: ${checksSummary(results)}\n\nCombined diff:\n${d.stat}\n\n${truncate(d.patch, 60_000)}`;
   }
@@ -818,6 +870,8 @@ export class JobRunner implements AgentHost, TeamApi {
     this.lastCheckpointAt = Date.now();
     const branches = [branchFor.main(this.jobId)];
     for (const a of this.agents.values()) {
+      // A chat agent edits the job branch itself, so its work is checkpointed there.
+      if (a.rec.role === "chat") await G.checkpointCommit(a.cwd, `wdash: checkpoint (${why})`).catch(() => undefined);
       if (a.rec.role !== "worker") continue;
       branches.push(a.rec.branch!);
       await G.checkpointCommit(a.cwd, `wdash: checkpoint (${why})`).catch(() => undefined);
@@ -838,7 +892,7 @@ export class JobRunner implements AgentHost, TeamApi {
   // =====================================================================
 
   private async notify(reason: AttentionReason, ctx: { agentId?: string; ref?: string; detail?: string }): Promise<void> {
-    const name = ctx.agentId ? (ctx.agentId === ORCH ? "Orchestrator" : `Worker ${ctx.agentId}`) : undefined;
+    const name = ctx.agentId ? (ctx.agentId === ORCH ? "Orchestrator" : ctx.agentId === CHAT_AGENT ? "Claude" : `Worker ${ctx.agentId}`) : undefined;
     await raise(this.relay, reason, { jobId: this.jobId, agentName: name, ...ctx });
   }
 

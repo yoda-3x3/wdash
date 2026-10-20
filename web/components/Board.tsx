@@ -78,6 +78,7 @@ function JobCard({ job, waiting, now }: { job: JobRecord; waiting: number; now: 
     <Link href={`/jobs/${job.id}`} className={`card block p-3 transition hover:border-accent/60 ${waiting ? "border-warn/50" : ""}`}>
       <div className="flex items-center gap-2 text-xs text-muted">
         <span className="font-medium text-fg">{job.project}</span>
+        {job.kind === "chat" && <span className="chip bg-info/15 text-info">chat</span>}
         <span>·</span>
         <span>{timeAgo(job.updatedAt, now)}</span>
         <span className="ml-auto flex gap-1">

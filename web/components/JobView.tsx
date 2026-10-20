@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentRecord, Approval, Attachment, Attention, JobRecord, WdEvent } from "@wdash/shared";
-import { TERMINAL_STATUSES } from "@wdash/shared";
+import { CHAT_AGENT, TERMINAL_STATUSES } from "@wdash/shared";
 import { api, timeAgo, usd, usePoll } from "@/lib/client";
 import { AttentionCard, Bar, LocationBadge, StatusChip } from "./bits";
 import { AttachButton, FileChips, dropProps, fmtSize, useUploads } from "./Attachments";
@@ -81,7 +81,7 @@ export function JobView({ id }: { id: string }) {
       {tab === "diff" && <Diffs events={events} job={job} />}
       {tab === "usage" && <Usage job={job} agents={agents} usage={detail.usage} />}
 
-      {!TERMINAL_STATUSES.includes(job.status) && !archived && <ChatBox jobId={id} agents={agents} />}
+      {!TERMINAL_STATUSES.includes(job.status) && !archived && <ChatBox jobId={id} agents={agents} lead={job.kind === "chat" ? CHAT_AGENT : "orchestrator"} />}
     </div>
   );
 }
@@ -182,9 +182,22 @@ function Header({ job, lease, onChange }: { job: JobRecord; lease: string | null
               Resume
             </button>
           )}
+          {!terminal && job.kind === "chat" && job.status !== "merging" && (
+            <button
+              className="btn btn-primary"
+              disabled={busy}
+              onClick={() => cmd({ cmd: { type: "finish_chat" } }, "End this chat and merge its changes into your PC's copy?")}
+            >
+              Finish & merge
+            </button>
+          )}
           {!terminal && (
-            <button className="btn btn-danger" disabled={busy} onClick={() => cmd({ cmd: { type: "cancel" } }, "Cancel this job? Branches are kept.")}>
-              Cancel
+            <button
+              className="btn btn-danger"
+              disabled={busy}
+              onClick={() => cmd({ cmd: { type: "cancel" } }, job.kind === "chat" ? "End this chat without merging? Its branch is kept." : "Cancel this job? Branches are kept.")}
+            >
+              {job.kind === "chat" ? "Discard" : "Cancel"}
             </button>
           )}
           {terminal && !job.archived && (
@@ -715,9 +728,9 @@ function JobFiles({ jobId, files }: { jobId: string; files: Attachment[] }) {
   );
 }
 
-function ChatBox({ jobId, agents }: { jobId: string; agents: AgentRecord[] }) {
+function ChatBox({ jobId, agents, lead }: { jobId: string; agents: AgentRecord[]; lead: string }) {
   const [text, setText] = useState("");
-  const [to, setTo] = useState("orchestrator");
+  const [to, setTo] = useState(lead);
   const [busy, setBusy] = useState(false);
   const files = useUploads(`/api/jobs/${jobId}/files`);
   const live = agents.filter((a) => !["done", "stopped"].includes(a.status));

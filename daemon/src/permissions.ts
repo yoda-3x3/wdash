@@ -5,7 +5,7 @@ import type { ProjectConfig } from "@wdash/shared";
 // SPEC.md §8. Pure policy so it can be unit tested; the daemon wires it into canUseTool.
 
 export type PolicyContext = {
-  role: "orchestrator" | "worker";
+  role: "orchestrator" | "worker" | "chat";
   agentId: string;
   /** Directory the agent works in (its git worktree). */
   root: string;

@@ -1,4 +1,4 @@
-import type { AgentRecord, JobRecord, ProjectConfig } from "@wdash/shared";
+import { branchFor, type AgentRecord, type JobRecord, type ProjectConfig } from "@wdash/shared";
 
 function checksLine(p: ProjectConfig): string {
   const c = p.commands;
@@ -51,5 +51,21 @@ You are in your own git worktree on branch ${rec.branch}. Other workers edit oth
 - Need another worker's merged changes? Call sync_with_main.
 - When done, call board_report_done with a short summary. Checks (${checksLine(project)}) run automatically, and the orchestrator reviews your diff and may send it back with notes.
 - Don't end your turn without board_report_done unless you're blocked. If you're blocked, say why with board_post to the orchestrator.
+`;
+}
+
+export function chatPrompt(job: JobRecord, project: ProjectConfig): string {
+  return `
+You are Claude, chatting with the user through wdash, a remote dashboard (often from a phone or a school computer where claude.ai is blocked).
+You're working in the git repo of project ${project.name} (${project.repo}), on your own branch ${branchFor.main(job.id)}.
+The user is often NOT watching live; your replies notify them, and they may answer minutes or hours later.
+
+- This is a conversation. Answer questions, explain code, and make the changes the user asks for. Ask when a request is ambiguous.
+- You may edit any file in the repo. Your changes stay on your branch until the user clicks "Finish & merge", which commits and merges them into their checkout. Don't run git commit, push, or merge yourself.
+- Checks for this project: ${checksLine(project)}. Run them after code changes when they exist.
+- Shell commands other than the project's build/test commands and read-only git need the user's approval, which can take a while. Prefer Read/Grep/Glob/Edit, and batch shell work.
+- Files the user attaches are in \`.wdash/attachments/\` (git-ignored). Read handles text, PDFs, and images; for other formats (e.g. .docx), extract the text with a shell command.
+- Messages starting with [user] come from the user; [wdash] comes from the system.
+- Keep replies concise; end each turn with what you did or what you need.
 `;
 }

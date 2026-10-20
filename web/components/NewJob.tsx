@@ -1,16 +1,20 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { MODEL_PRESETS, type ModelPreset, type ProjectConfig } from "@wdash/shared";
+import { MODEL_PRESETS, type ChatModel, type JobKind, type ModelPreset, type ProjectConfig } from "@wdash/shared";
 import { api, usePoll } from "@/lib/client";
 import { useBoard } from "./Shell";
 import { AttachButton, FileChips, dropProps, useUploads } from "./Attachments";
 
 const LAST_PROJECT = "wdash:lastProject";
 
-/** Hybrid form (SPEC.md §4): project + task up front, everything else under Advanced. */
-export function NewJob() {
+const CHAT_MODELS: Record<ChatModel, string> = { sonnet: "Sonnet", opus: "Opus", haiku: "Haiku" };
+
+/** Hybrid form (SPEC.md §4): project + task up front, everything else under Advanced. Also starts chats. */
+export function NewJob({ kind = "team" }: { kind?: JobKind }) {
+  const chat = kind === "chat";
   const router = useRouter();
   const { state } = useBoard();
   const { data } = usePoll<{ projects: ProjectConfig[] }>("/api/projects", 60_000);
@@ -21,6 +25,7 @@ export function NewJob() {
   const [advanced, setAdvanced] = useState(false);
   const [workers, setWorkers] = useState("auto");
   const [models, setModels] = useState<ModelPreset>("opus-sonnet");
+  const [chatModel, setChatModel] = useState<ChatModel>("sonnet");
   const [runOn, setRunOn] = useState("auto");
   const [budget, setBudget] = useState("");
   const [reviewCap, setReviewCap] = useState(3);
@@ -57,6 +62,8 @@ export function NewJob() {
       const res = await api<{ id: string }>("/api/jobs", {
         project,
         task: task.trim(),
+        kind,
+        chatModel,
         workers,
         models,
         runOn,
@@ -76,7 +83,7 @@ export function NewJob() {
       <div className="card p-6 text-sm">
         <h1 className="mb-2 text-lg font-semibold">No projects yet</h1>
         <p className="text-muted">
-          Add a project to <code>daemon/config/projects.json</code> on your PC and start the daemon once. It publishes the allowlist here.
+          <Link href="/projects/new" className="text-accent">Create a project</Link>, or add one to <code>daemon/config/projects.json</code> on your PC and start the daemon once. It publishes the allowlist here.
         </p>
       </div>
     );
@@ -84,9 +91,29 @@ export function NewJob() {
 
   return (
     <form onSubmit={submit} className="mx-auto max-w-2xl space-y-4" {...dropProps(files.add)}>
-      <h1 className="text-lg font-semibold">New job</h1>
+      <div className="flex items-center gap-3">
+        <h1 className="text-lg font-semibold">{chat ? "New chat" : "New job"}</h1>
+        <div className="ml-auto flex rounded-lg border border-line p-0.5 text-sm">
+          <Link href="/new" className={`rounded-md px-3 py-1 ${chat ? "text-muted" : "bg-panel-2 font-medium"}`}>
+            Team job
+          </Link>
+          <Link href="/chat/new" className={`rounded-md px-3 py-1 ${chat ? "bg-panel-2 font-medium" : "text-muted"}`}>
+            Chat
+          </Link>
+        </div>
+      </div>
+      <p className="text-xs text-muted">
+        {chat
+          ? "Talk with one Claude in the project's repo. It can edit files; Finish & merge brings its changes into your PC's copy."
+          : "An orchestrator plans the work, workers do it in parallel, and every change is reviewed and tested before merging."}
+      </p>
       <label className="block space-y-1">
-        <span className="text-sm font-medium">Project</span>
+        <span className="flex items-center text-sm font-medium">
+          Project
+          <Link href="/projects/new" className="ml-auto text-xs font-normal text-accent">
+            + New project
+          </Link>
+        </span>
         <select className="input" value={project} onChange={(e) => setProject(e.target.value)} required>
           {projects.map((p) => (
             <option key={p.name} value={p.name}>
@@ -96,10 +123,10 @@ export function NewJob() {
         </select>
       </label>
       <label className="block space-y-1">
-        <span className="text-sm font-medium">What should the agents do?</span>
+        <span className="text-sm font-medium">{chat ? "Your first message" : "What should the agents do?"}</span>
         <textarea
-          className="input min-h-40 resize-y"
-          placeholder="e.g. Fix the drag calculation in the sweep and add a regression test"
+          className={`input resize-y ${chat ? "min-h-28" : "min-h-40"}`}
+          placeholder={chat ? "e.g. Walk me through how the solver works" : "e.g. Fix the drag calculation in the sweep and add a regression test"}
           value={task}
           onChange={(e) => setTask(e.target.value)}
           required
@@ -113,31 +140,46 @@ export function NewJob() {
         </div>
         <FileChips items={files.items} onRemove={files.remove} />
       </div>
+      {chat && (
+        <Field label="Model">
+          <select className="input sm:w-56" value={chatModel} onChange={(e) => setChatModel(e.target.value as ChatModel)}>
+            {Object.entries(CHAT_MODELS).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
 
       <button type="button" className="text-sm text-accent" onClick={() => setAdvanced((v) => !v)}>
         {advanced ? "▾" : "▸"} Advanced
       </button>
       {advanced && (
         <div className="card grid gap-3 p-3 sm:grid-cols-2">
-          <Field label="Workers">
-            <select className="input" value={workers} onChange={(e) => setWorkers(e.target.value)}>
-              <option value="auto">Auto (orchestrator decides, 1–4)</option>
-              {["1", "2", "3", "4"].map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Models">
-            <select className="input" value={models} onChange={(e) => setModels(e.target.value as ModelPreset)}>
-              {Object.entries(MODEL_PRESETS).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v.label}
-                </option>
-              ))}
-            </select>
-          </Field>
+          {!chat && (
+            <>
+              <Field label="Workers">
+                <select className="input" value={workers} onChange={(e) => setWorkers(e.target.value)}>
+                  <option value="auto">Auto (orchestrator decides, 1–4)</option>
+                  {["1", "2", "3", "4"].map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Models">
+                <select className="input" value={models} onChange={(e) => setModels(e.target.value as ModelPreset)}>
+                  {Object.entries(MODEL_PRESETS).map(([k, v]) => (
+                    <option key={k} value={k}>
+                      {v.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </>
+          )}
           <Field label="Run on">
             <select className="input" value={runOn} onChange={(e) => setRunOn(e.target.value)}>
               <option value="auto">Auto (PC if online)</option>
@@ -150,15 +192,17 @@ export function NewJob() {
           <Field label={`Budget, API-equivalent $ (default ${selected?.defaultBudgetUsd ?? 5})`}>
             <input className="input" inputMode="decimal" placeholder={String(selected?.defaultBudgetUsd ?? 5)} value={budget} onChange={(e) => setBudget(e.target.value)} />
           </Field>
-          <Field label="Review rounds per worker before asking you">
-            <input className="input" type="number" min={1} max={10} value={reviewCap} onChange={(e) => setReviewCap(Number(e.target.value))} />
-          </Field>
+          {!chat && (
+            <Field label="Review rounds per worker before asking you">
+              <input className="input" type="number" min={1} max={10} value={reviewCap} onChange={(e) => setReviewCap(Number(e.target.value))} />
+            </Field>
+          )}
         </div>
       )}
 
       <div className="flex items-center gap-3">
         <button className="btn btn-primary px-5 py-2" disabled={busy || files.busy || !project || !task.trim()}>
-          {busy ? "Starting…" : files.busy ? "Uploading…" : "Start"}
+          {busy ? "Starting…" : files.busy ? "Uploading…" : chat ? "Start chat" : "Start"}
         </button>
         <span className="text-xs text-muted">Runs on {where}.</span>
       </div>

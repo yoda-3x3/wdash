@@ -3,6 +3,7 @@ import { loadLocalProjects } from "./config.js";
 import { syncIntoCheckout } from "./git.js";
 import { JobRunner } from "./job.js";
 import { clear, raise } from "./notify.js";
+import { processProjectRequests } from "./projects.js";
 import { Relay } from "./relay.js";
 
 const MAX_CONCURRENT_JOBS = 3;
@@ -68,12 +69,27 @@ export async function runHome(): Promise<void> {
   await sync();
   const syncTimer = setInterval(sync, 5 * 60_000);
 
+  // "New project" requests from the dashboard (one at a time; gh does the GitHub side).
+  let creating = false;
+  const projectTimer = setInterval(async () => {
+    if (creating) return;
+    creating = true;
+    try {
+      if (await processProjectRequests(relay)) projects = loadLocalProjects();
+    } catch (e) {
+      console.error("project requests failed", (e as Error).message);
+    } finally {
+      creating = false;
+    }
+  }, 3000);
+
   const shutdown = async () => {
     if (stopping) return;
     stopping = true;
     console.log("shutting down…");
     clearInterval(hb);
     clearInterval(syncTimer);
+    clearInterval(projectTimer);
     await relay.r.del(K.homeHeartbeat).catch(() => undefined);
     process.exit(0);
   };

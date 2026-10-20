@@ -91,6 +91,11 @@ export function orchestratorServer(api: TeamApi, selfId: string): McpSdkServerCo
   });
 }
 
+/** Chat agents work alone: no board tools. */
+export function chatServer(): McpSdkServerConfigWithInstance {
+  return createSdkMcpServer({ name: "wdash", version: "0.1.0", tools: [] });
+}
+
 export function workerServer(api: TeamApi, selfId: string): McpSdkServerConfigWithInstance {
   return createSdkMcpServer({
     name: "wdash",
