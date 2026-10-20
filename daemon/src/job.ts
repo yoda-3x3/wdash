@@ -323,12 +323,21 @@ export class JobRunner implements AgentHost, TeamApi {
         if (!target) return;
         await this.relay.emit({ jobId: this.jobId, agentId: target.id, type: "message", payload: { role: "user", text: cmd.text } });
         await clear(this.relay, this.jobId, "waiting_for_input", target.id);
+        // The agent is blocked on a question: a chat reply is the answer (it can't read new messages until then).
+        const question = [...this.pending.entries()].find(([, p]) => p.kind === "question" && p.agentId === target.id);
+        if (question && !cmd.attachments?.length) {
+          const qs = (((await this.relay.getApproval(this.jobId, question[0]))?.input.questions as Array<{ question: string }> | undefined) ?? []).map((q) => q.question);
+          question[1].resolve({ allow: true, answers: Object.fromEntries((qs.length ? qs : ["Question"]).map((q) => [q, cmd.text])) });
+          return;
+        }
         let note = "";
         if (cmd.attachments?.length) {
           const names = await this.deliverAttachments(cmd.attachments);
           if (names.length) note = `\n\n[wdash] The user attached: ${names.join(", ")} (in ${ATTACHMENTS_DIR}/ in every agent's working directory).`;
         }
         target.send(`[user] ${cmd.text}${note}`);
+        // Show it as working right away, not only once its first reply streams in.
+        if (target.rec.status === "idle") await target.setStatus("running");
         return;
       }
       case "decide": {

@@ -49,17 +49,12 @@ export function JobView({ id }: { id: string }) {
       <Header job={job} lease={detail.lease} onChange={refresh} />
       <JobFiles jobId={id} files={detail.files ?? []} />
 
-      {detail.attention.length > 0 && (
+      {detail.attention.some((a) => a.reason !== "question") && (
         <div className="space-y-2">
           {detail.attention
             .filter((a) => a.reason !== "question")
             .map((a) => (
               <AttentionCard key={a.id} att={a} onDone={refresh} />
-            ))}
-          {detail.approvals
-            .filter((a) => a.kind === "question")
-            .map((q) => (
-              <QuestionCard key={q.requestId} jobId={id} q={q} onDone={refresh} />
             ))}
         </div>
       )}
@@ -81,7 +76,20 @@ export function JobView({ id }: { id: string }) {
       {tab === "diff" && <Diffs events={events} job={job} />}
       {tab === "usage" && <Usage job={job} agents={agents} usage={detail.usage} />}
 
-      {!TERMINAL_STATUSES.includes(job.status) && !archived && <ChatBox jobId={id} agents={agents} lead={job.kind === "chat" ? CHAT_AGENT : "orchestrator"} />}
+      {detail.approvals
+        .filter((a) => a.kind === "question")
+        .map((q) => (
+          <QuestionCard key={q.requestId} jobId={id} q={q} onDone={refresh} />
+        ))}
+      {!TERMINAL_STATUSES.includes(job.status) && !archived && <Working agents={agents} events={events} />}
+      {!TERMINAL_STATUSES.includes(job.status) && !archived && (
+        <ChatBox
+          jobId={id}
+          agents={agents}
+          lead={job.kind === "chat" ? CHAT_AGENT : "orchestrator"}
+          asking={detail.approvals.filter((a) => a.kind === "question").map((a) => a.agentId)}
+        />
+      )}
     </div>
   );
 }
@@ -235,7 +243,7 @@ function QuestionCard({ jobId, q, onDone }: { jobId: string; q: Approval; onDone
     });
   return (
     <div className="card space-y-3 border-warn/50 p-3">
-      <div className="text-sm font-medium">{q.agentId === "orchestrator" ? "Orchestrator" : `Worker ${q.agentId}`} has a question</div>
+      <div className="text-sm font-medium">{q.agentId === "orchestrator" ? "Orchestrator" : q.agentId === CHAT_AGENT ? "Claude" : `Worker ${q.agentId}`} has a question</div>
       {questions.map((qq) => (
         <div key={qq.question} className="space-y-1.5">
           <div className="text-sm">{qq.question}</div>
@@ -295,6 +303,15 @@ function Timeline({ events, agents }: { events: WdEvent[]; agents: AgentRecord[]
     return m;
   }, [events]);
 
+  const answers = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const e of events) {
+      const a = e.type === "permission_decision" ? (e.payload.answers as Record<string, string> | undefined) : undefined;
+      if (a) m.set(String(e.payload.requestId), [...new Set(Object.values(a))].join(" / "));
+    }
+    return m;
+  }, [events]);
+
   const rows = useMemo(() => {
     const out: Row[] = [];
     for (const e of events) {
@@ -329,7 +346,12 @@ function Timeline({ events, agents }: { events: WdEvent[]; agents: AgentRecord[]
       <div className="space-y-1.5">
         {rows.map((r, i) =>
           r.kind === "event" ? (
-            <EventRow key={r.e.id ?? i} e={r.e} result={r.e.type === "tool_call" ? results.get(String(r.e.payload.callId)) : undefined} />
+            <EventRow
+              key={r.e.id ?? i}
+              e={r.e}
+              result={r.e.type === "tool_call" ? results.get(String(r.e.payload.callId)) : undefined}
+              answer={r.e.type === "question" ? answers.get(String(r.e.payload.requestId)) : undefined}
+            />
           ) : (
             <details key={`${r.id}-${i}`} className="card ml-4 border-dashed px-3 py-2">
               <summary className="cursor-pointer text-xs text-muted">
@@ -354,13 +376,19 @@ function AgentTag({ id }: { id?: string }) {
   return <span className={`font-mono text-[11px] ${id === "orchestrator" ? "text-accent" : "text-info"}`}>{id}</span>;
 }
 
-function EventRow({ e, result }: { e: WdEvent; result?: WdEvent }) {
+function EventRow({ e, result, answer }: { e: WdEvent; result?: WdEvent; answer?: string }) {
   const p = e.payload as Record<string, unknown>;
   const time = new Date(e.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const head = (
     <span className="mr-2 inline-flex items-center gap-1.5 text-[11px] text-muted">
       <span>{time}</span>
-      <AgentTag id={e.agentId} />
+      {e.type === "message" && p.role === "user" ? (
+        <>
+          <span className="font-medium text-fg">you</span>→<AgentTag id={e.agentId} />
+        </>
+      ) : (
+        <AgentTag id={e.agentId} />
+      )}
     </span>
   );
   switch (e.type) {
@@ -372,6 +400,7 @@ function EventRow({ e, result }: { e: WdEvent; result?: WdEvent }) {
         </div>
       );
     case "tool_call": {
+      if (p.tool === "AskUserQuestion") return null;
       const ok = result ? (result.payload.ok as boolean) : undefined;
       return (
         <details className="rounded-lg bg-panel px-3 py-1.5 text-xs">
@@ -397,6 +426,7 @@ function EventRow({ e, result }: { e: WdEvent; result?: WdEvent }) {
       return (
         <div className="rounded-lg border border-warn/40 px-3 py-1.5 text-xs">
           {head}asked you: {String(p.title)}
+          {answer && <div className="mt-1 text-fg">↳ {answer}</div>}
         </div>
       );
     case "plan":
@@ -714,6 +744,32 @@ function fmt(n: unknown): string {
 
 // ---------------------------------------------------------------- chat
 
+/** "claude is working…" with the latest step, so it's obvious something is happening. */
+function Working({ agents, events }: { agents: AgentRecord[]; events: WdEvent[] }) {
+  const busy = agents.filter((a) => a.status === "running" || a.status === "starting");
+  if (!busy.length) return null;
+  const ids = new Set(busy.map((a) => a.id));
+  const last = [...events].reverse().find((e) => e.agentId && ids.has(e.agentId) && (e.type === "tool_call" || e.type === "message"));
+  const step =
+    last?.type === "tool_call"
+      ? `${String(last.payload.tool)} ${summarizeInput(last.payload.input)}`.trim()
+      : last?.type === "message" && last.payload.role !== "user"
+        ? "writing a reply"
+        : "thinking";
+  return (
+    <div className="flex items-center gap-2 px-1 text-xs text-muted" role="status" aria-live="polite">
+      <span className="flex gap-1" aria-hidden>
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.3s]" />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.15s]" />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent" />
+      </span>
+      <span className="truncate">
+        <span className="font-medium text-fg">{busy.map((a) => a.id).join(", ")}</span> {busy.length === 1 ? "is" : "are"} working… {step && <span>({step})</span>}
+      </span>
+    </div>
+  );
+}
+
 function JobFiles({ jobId, files }: { jobId: string; files: Attachment[] }) {
   if (!files.length) return null;
   return (
@@ -728,7 +784,7 @@ function JobFiles({ jobId, files }: { jobId: string; files: Attachment[] }) {
   );
 }
 
-function ChatBox({ jobId, agents, lead }: { jobId: string; agents: AgentRecord[]; lead: string }) {
+function ChatBox({ jobId, agents, lead, asking }: { jobId: string; agents: AgentRecord[]; lead: string; asking: string[] }) {
   const [text, setText] = useState("");
   const [to, setTo] = useState(lead);
   const [busy, setBusy] = useState(false);
@@ -770,7 +826,7 @@ function ChatBox({ jobId, agents, lead }: { jobId: string; agents: AgentRecord[]
             ))}
           </select>
         )}
-        <input className="input" placeholder={`Message ${to}…`} value={text} onChange={(e) => setText(e.target.value)} />
+        <input className="input" placeholder={asking.includes(to) ? `Answer ${to}'s question…` : `Message ${to}…`} value={text} onChange={(e) => setText(e.target.value)} />
         <button className="btn btn-primary" disabled={!canSend}>
           Send
         </button>
