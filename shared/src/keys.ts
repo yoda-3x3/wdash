@@ -15,6 +15,9 @@ export const K = {
   approvals: (id: string) => `wd:job:${id}:approvals`, // HASH request_id -> Approval JSON
   allowRules: (id: string) => `wd:job:${id}:allow`, // SET of "Tool:prefix" rules allowed for the job
   usage: (id: string) => `wd:job:${id}:usage`, // HASH agent_id -> Usage JSON
+  files: (id: string) => `wd:job:${id}:files`, // HASH file_id -> Attachment JSON
+  fileData: (id: string) => `wd:job:${id}:filedata`, // HASH file_id -> base64 contents
+  upload: (fileId: string) => `wd:upload:${fileId}`, // STRING EX 1 day: { meta, data } for a file picked before its job exists
   lease: (id: string) => `wd:job:${id}:lease`, // STRING EX 30 -> "home" | "cloud:<run>"
   sessions: (projectKey: string, sessionId: string, subpath?: string) =>
     `wd:sess:${projectKey}:${sessionId}${subpath ? `:${subpath}` : ""}`, // LIST of transcript entries
@@ -44,6 +47,8 @@ export function jobKeys(id: string): string[] {
     K.approvals(id),
     K.allowRules(id),
     K.usage(id),
+    K.files(id),
+    K.fileData(id),
   ];
 }
 

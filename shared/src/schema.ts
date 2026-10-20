@@ -89,6 +89,42 @@ export const JobRecord = z.object({
 });
 export type JobRecord = z.infer<typeof JobRecord>;
 
+// ---------- Attachments ----------
+
+/** Per file. Vercel caps request bodies at 4.5 MB, and the contents are stored base64 in Redis. */
+export const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
+export const MAX_ATTACHMENTS = 20;
+/** Where the daemon puts attachments, relative to each agent's worktree. Git-excluded, never committed. */
+export const ATTACHMENTS_DIR = ".wdash/attachments";
+
+export const Attachment = z.object({
+  id: z.string(),
+  /** Safe file name, unique within the job. */
+  name: z.string(),
+  size: z.number(),
+  type: z.string().default("application/octet-stream"),
+  addedAt: z.number(),
+});
+export type Attachment = z.infer<typeof Attachment>;
+
+/** Strip path parts and characters that are awkward on Windows or in shells. */
+export function safeFileName(raw: string): string {
+  const base = raw.split(/[\\/]/).pop() ?? "";
+  const cleaned = base.replace(/[^\w.\- ()]+/g, "_").replace(/^[.\s]+/, "").trim().slice(0, 120);
+  return cleaned || "file";
+}
+
+/** `name`, or `name (2).ext`, … so it doesn't collide with `taken`. */
+export function uniqueFileName(name: string, taken: Set<string>): string {
+  if (!taken.has(name)) return name;
+  const dot = name.lastIndexOf(".");
+  const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
+  for (let i = 2; ; i++) {
+    const n = `${stem} (${i})${ext}`;
+    if (!taken.has(n)) return n;
+  }
+}
+
 export const NewJobInput = z.object({
   project: z.string().min(1),
   task: z.string().min(1).max(20_000),
@@ -97,6 +133,8 @@ export const NewJobInput = z.object({
   workers: z.enum(["auto", "1", "2", "3", "4"]).default("auto"),
   budgetUsd: z.number().positive().max(500).optional(),
   reviewCap: z.number().int().min(1).max(10).default(3),
+  /** Upload ids from POST /api/uploads. */
+  attachments: z.array(z.string()).max(MAX_ATTACHMENTS).default([]),
 });
 export type NewJobInput = z.infer<typeof NewJobInput>;
 
@@ -172,7 +210,13 @@ export type WdEvent = z.infer<typeof WdEvent>;
 // ---------- Commands (UI -> daemon) ----------
 
 export const Command = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("user_message"), text: z.string().min(1).max(20_000), agentId: z.string().optional() }),
+  z.object({
+    type: z.literal("user_message"),
+    text: z.string().min(1).max(20_000),
+    agentId: z.string().optional(),
+    /** Ids of files already added to the job (POST /api/jobs/:id/files). */
+    attachments: z.array(z.string()).max(MAX_ATTACHMENTS).optional(),
+  }),
   z.object({
     type: z.literal("decide"),
     requestId: z.string(),

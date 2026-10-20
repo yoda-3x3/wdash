@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { MODEL_PRESETS, type ModelPreset, type ProjectConfig } from "@wdash/shared";
 import { api, usePoll } from "@/lib/client";
 import { useBoard } from "./Shell";
+import { AttachButton, FileChips, dropProps, useUploads } from "./Attachments";
 
 const LAST_PROJECT = "wdash:lastProject";
 
@@ -25,6 +26,7 @@ export function NewJob() {
   const [reviewCap, setReviewCap] = useState(3);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
+  const files = useUploads("/api/uploads");
 
   useEffect(() => {
     if (project || !projects.length) return;
@@ -43,7 +45,7 @@ export function NewJob() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!project || !task.trim()) return;
+    if (!project || !task.trim() || files.busy) return;
     setBusy(true);
     setErr(undefined);
     try {
@@ -60,6 +62,7 @@ export function NewJob() {
         runOn,
         reviewCap,
         budgetUsd: budget ? Number(budget) : undefined,
+        attachments: files.ready.map((f) => f.id),
       });
       router.push(`/jobs/${res.id}`);
     } catch (e) {
@@ -80,7 +83,7 @@ export function NewJob() {
   }
 
   return (
-    <form onSubmit={submit} className="mx-auto max-w-2xl space-y-4">
+    <form onSubmit={submit} className="mx-auto max-w-2xl space-y-4" {...dropProps(files.add)}>
       <h1 className="text-lg font-semibold">New job</h1>
       <label className="block space-y-1">
         <span className="text-sm font-medium">Project</span>
@@ -103,6 +106,13 @@ export function NewJob() {
           autoFocus
         />
       </label>
+      <div className="space-y-2">
+        <div className="flex items-center gap-3">
+          <AttachButton onFiles={files.add} />
+          <span className="text-xs text-muted">Docs, PDFs, images, data… up to 4 MB each. Or drop them here.</span>
+        </div>
+        <FileChips items={files.items} onRemove={files.remove} />
+      </div>
 
       <button type="button" className="text-sm text-accent" onClick={() => setAdvanced((v) => !v)}>
         {advanced ? "▾" : "▸"} Advanced
@@ -147,8 +157,8 @@ export function NewJob() {
       )}
 
       <div className="flex items-center gap-3">
-        <button className="btn btn-primary px-5 py-2" disabled={busy || !project || !task.trim()}>
-          {busy ? "Starting…" : "Start"}
+        <button className="btn btn-primary px-5 py-2" disabled={busy || files.busy || !project || !task.trim()}>
+          {busy ? "Starting…" : files.busy ? "Uploading…" : "Start"}
         </button>
         <span className="text-xs text-muted">Runs on {where}.</span>
       </div>

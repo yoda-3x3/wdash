@@ -7,7 +7,7 @@ import { deleteBranch, listBranches } from "@/lib/github";
 import { requeue } from "@/lib/placement";
 import { redis } from "@/lib/redis";
 import { archiveJob } from "@/lib/archive";
-import { emit, getJob, getProject, pushCommand, setStatus, updateJob } from "@/lib/relay";
+import { emit, getJob, getProject, listFiles, pushCommand, setStatus, updateJob } from "@/lib/relay";
 
 const Body = z.union([
   z.object({ cmd: Command }),
@@ -65,6 +65,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   const cmd = parsed.data.cmd;
+  if (cmd.type === "user_message" && cmd.attachments?.length) {
+    const known = new Set((await listFiles(id)).map((f) => f.id));
+    if (!cmd.attachments.every((f) => known.has(f))) return NextResponse.json({ error: "Unknown attachment." }, { status: 400 });
+  }
   if (live) {
     await pushCommand(id, cmd);
     return NextResponse.json({ ok: true, delivered: "runner" });

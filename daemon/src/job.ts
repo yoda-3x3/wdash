@@ -1,7 +1,9 @@
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SDKResultMessage, McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk";
 import type { Redis } from "ioredis";
 import {
+  ATTACHMENTS_DIR,
   K,
   MODEL_PRESETS,
   TERMINAL_STATUSES,
@@ -55,6 +57,8 @@ export class JobRunner implements AgentHost, TeamApi {
   private timers: NodeJS.Timeout[] = [];
   private cmdConn: Redis;
   private stopped = false;
+  /** Attachment contents already fetched from the relay, by file id. */
+  private fileCache = new Map<string, Buffer>();
   private finishing = false;
   private lastCheckpointAt = 0;
   private budgetWarned = false;
@@ -119,6 +123,8 @@ export class JobRunner implements AgentHost, TeamApi {
     if (this.mode === "cloud") await G.fetchAll(this.repoDir);
     const base = await G.baseRef(this.repoDir, this.project.baseBranch, this.mode);
     this.mainWt = await G.addWorktree(this.repoDir, this.wtPath("main"), branchFor.main(this.jobId), base);
+    await G.excludeFromGit(this.repoDir, "/.wdash/");
+    await this.syncAttachments(this.mainWt);
     await G.pushBranches(this.repoDir, [branchFor.main(this.jobId)]).catch(async (e) => {
       await this.info(`Couldn't push job branch yet (${(e as Error).message.slice(0, 200)}). Cloud failover needs it pushed.`);
     });
@@ -142,7 +148,9 @@ export class JobRunner implements AgentHost, TeamApi {
     };
     const runner = this.makeRunner(rec, this.mainWt, orchestratorPrompt(this.job, this.project));
     await runner.save();
-    runner.start(`# Task from the user\n\n${this.job.task}\n\nStart by exploring the repo, then submit a plan with team_plan.`);
+    const files = (await this.relay.listFiles(this.jobId)).map((f) => f.name);
+    const attached = files.length ? `\n\nThe user attached: ${files.join(", ")} (in ${ATTACHMENTS_DIR}/).` : "";
+    runner.start(`# Task from the user\n\n${this.job.task}${attached}\n\nStart by exploring the repo, then submit a plan with team_plan.`);
   }
 
   private async resumeAgents(recs: AgentRecord[]): Promise<void> {
@@ -158,6 +166,7 @@ export class JobRunner implements AgentHost, TeamApi {
       let cwd = this.mainWt;
       if (rec.role === "worker") {
         cwd = await G.addWorktree(this.repoDir, this.wtPath(rec.id), branchFor.worker(this.jobId, rec.id), branchFor.main(this.jobId));
+        await this.syncAttachments(cwd);
         this.workers.set(rec.id, { rounds: rec.reviewRounds, failedChecks: 0, approved: false, idleNudges: 0 });
       }
       const prompt = rec.role === "orchestrator" ? orchestratorPrompt(this.job, this.project) : workerPrompt(this.job, this.project, rec);
@@ -265,7 +274,12 @@ export class JobRunner implements AgentHost, TeamApi {
         if (!target) return;
         await this.relay.emit({ jobId: this.jobId, agentId: target.id, type: "message", payload: { role: "user", text: cmd.text } });
         await clear(this.relay, this.jobId, "waiting_for_input", target.id);
-        target.send(`[user] ${cmd.text}`);
+        let note = "";
+        if (cmd.attachments?.length) {
+          const names = await this.deliverAttachments(cmd.attachments);
+          if (names.length) note = `\n\n[wdash] The user attached: ${names.join(", ")} (in ${ATTACHMENTS_DIR}/ in every agent's working directory).`;
+        }
+        target.send(`[user] ${cmd.text}${note}`);
         return;
       }
       case "decide": {
@@ -551,6 +565,7 @@ export class JobRunner implements AgentHost, TeamApi {
     const preset = MODEL_PRESETS[this.job.models];
     const branch = branchFor.worker(this.jobId, w.name);
     const cwd = await G.addWorktree(this.repoDir, this.wtPath(w.name), branch, branchFor.main(this.jobId));
+    await this.syncAttachments(cwd);
     const rec: AgentRecord = {
       id: w.name,
       role: "worker",
@@ -829,6 +844,42 @@ export class JobRunner implements AgentHost, TeamApi {
 
   private async info(text: string): Promise<void> {
     await this.relay.emit({ jobId: this.jobId, type: "info", payload: { text } });
+  }
+
+  // =====================================================================
+  // attachments
+  // =====================================================================
+
+  /** Writes every job attachment into `cwd`'s attachments dir (git-excluded). Returns the names written. */
+  private async syncAttachments(cwd: string, only?: Set<string>): Promise<string[]> {
+    const files = (await this.relay.listFiles(this.jobId)).filter((f) => !only || only.has(f.id));
+    if (!files.length) return [];
+    const dir = join(cwd, ATTACHMENTS_DIR);
+    mkdirSync(dir, { recursive: true });
+    for (const f of files) {
+      const target = join(dir, f.name);
+      if (existsSync(target)) continue;
+      let data = this.fileCache.get(f.id);
+      if (!data) {
+        data = await this.relay.getFileData(this.jobId, f.id);
+        if (!data) {
+          await this.info(`Attachment ${f.name} is missing from storage; skipped.`);
+          continue;
+        }
+        this.fileCache.set(f.id, data);
+      }
+      writeFileSync(target, data);
+    }
+    return files.map((f) => f.name);
+  }
+
+  /** Files added mid-job: copy them into every live agent's worktree. */
+  private async deliverAttachments(ids: string[]): Promise<string[]> {
+    const only = new Set(ids);
+    const cwds = new Set([this.mainWt, ...[...this.agents.values()].map((a) => a.cwd)]);
+    let names: string[] = [];
+    for (const cwd of cwds) names = await this.syncAttachments(cwd, only);
+    return names;
   }
 
   private async emitChecks(agentId: string, results: CheckResult[], scope: "worker" | "final"): Promise<void> {

@@ -8,6 +8,7 @@ import {
   JobRecord,
   AgentRecord,
   Approval,
+  Attachment,
   Command,
   ProjectConfig,
   type WdEvent,
@@ -179,6 +180,19 @@ export class Relay {
       p.hset(K.projects, pr.name, JSON.stringify(pub));
     }
     await p.exec();
+  }
+
+  async listFiles(jobId: string): Promise<Attachment[]> {
+    const h = await this.r.hgetall(K.files(jobId));
+    return Object.values(h)
+      .map((v) => Attachment.safeParse(JSON.parse(v)))
+      .filter((p) => p.success)
+      .map((p) => p.data);
+  }
+
+  async getFileData(jobId: string, fileId: string): Promise<Buffer | undefined> {
+    const v = await this.r.hget(K.fileData(jobId), fileId);
+    return v ? Buffer.from(v, "base64") : undefined;
   }
 
   async getProject(name: string): Promise<ProjectConfig | undefined> {

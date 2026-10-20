@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import { branchFor } from "@wdash/shared";
 
@@ -61,6 +61,16 @@ export async function addWorktree(repo: string, path: string, branch: string, fr
   await tryGit(repo, "worktree", "prune");
   await git(repo, "worktree", "add", path, branch);
   return path;
+}
+
+/** Adds a pattern to the repo's info/exclude (shared by all its worktrees), so it is never committed. */
+export async function excludeFromGit(repo: string, pattern: string): Promise<void> {
+  const common = await git(repo, "rev-parse", "--git-common-dir");
+  const file = join(isAbsolute(common) ? common : join(repo, common), "info", "exclude");
+  const current = existsSync(file) ? readFileSync(file, "utf8") : "";
+  if (current.split(/\r?\n/).includes(pattern)) return;
+  mkdirSync(join(file, ".."), { recursive: true });
+  appendFileSync(file, `${current && !current.endsWith("\n") ? "\n" : ""}${pattern}\n`);
 }
 
 export async function removeWorktree(repo: string, path: string): Promise<void> {

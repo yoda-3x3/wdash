@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { branchFor } from "@wdash/shared";
+import { branchFor, safeFileName, uniqueFileName } from "@wdash/shared";
 import * as G from "./git.js";
 
 async function setup() {
@@ -80,4 +80,28 @@ test("cloud-style resume: a second clone picks up pushed job branches", async ()
   await G.fetchAll(cloud);
   const w2 = await G.addWorktree(cloud, join(root, "cloudwt", "w"), branchFor.worker(job, "w"), branchFor.main(job));
   assert.equal(readFileSync(join(w2, "c.txt"), "utf8"), "half done\n");
+});
+
+test("attachments dir is excluded from worktree commits", async () => {
+  const { root, home } = await setup();
+  await G.excludeFromGit(home, "/.wdash/");
+  await G.excludeFromGit(home, "/.wdash/"); // idempotent
+  const w = await G.addWorktree(home, join(root, "wt", "w1"), branchFor.worker("j2", "w1"), "main");
+  mkdirSync(join(w, ".wdash", "attachments"), { recursive: true });
+  writeFileSync(join(w, ".wdash", "attachments", "spec.pdf"), "pdf");
+  writeFileSync(join(w, "c.txt"), "real change");
+  await G.checkpointCommit(w, "wip");
+  const files = (await G.git(w, "show", "--name-only", "--format=", "HEAD")).split("\n").filter(Boolean);
+  assert.deepEqual(files, ["c.txt"]);
+  const common = await G.git(home, "rev-parse", "--git-common-dir");
+  const exclude = readFileSync(join(home, common, "info", "exclude"), "utf8");
+  assert.equal(exclude.split("\n").filter((l) => l === "/.wdash/").length, 1);
+});
+
+test("attachment names are made safe and unique", () => {
+  assert.equal(safeFileName("C:\\Users\\me\\Report <final>.docx"), "Report _final_.docx");
+  assert.equal(safeFileName("../../etc/passwd"), "passwd");
+  assert.equal(safeFileName("..."), "file");
+  assert.equal(uniqueFileName("a.pdf", new Set(["a.pdf", "a (2).pdf"])), "a (3).pdf");
+  assert.equal(uniqueFileName("notes", new Set(["notes"])), "notes (2)");
 });

@@ -9,6 +9,10 @@ import {
   ProjectConfig,
   RateLimitInfo,
   WdEvent,
+  Attachment,
+  MAX_ATTACHMENTS,
+  safeFileName,
+  uniqueFileName,
   type Command,
   type EventType,
   type NewJobInput,
@@ -142,13 +146,14 @@ export async function getAgents(jobId: string): Promise<AgentRecord[]> {
 
 export async function getJobDetail(id: string) {
   const r = redis();
-  const [job, agentsH, approvalsH, claims, usageH, lease] = await Promise.all([
+  const [job, agentsH, approvalsH, claims, usageH, lease, files] = await Promise.all([
     getJob(id),
     hgetall(K.agents(id)),
     hgetall(K.approvals(id)),
     hgetall(K.claims(id)),
     hgetall(K.usage(id)),
     r.get<string>(K.lease(id)),
+    listFiles(id),
   ]);
   const agents = Object.values(agentsH ?? {})
     .map((v) => AgentRecord.safeParse(JSON.parse(v)))
@@ -160,7 +165,7 @@ export async function getJobDetail(id: string) {
     .map((p) => p.data)
     .filter((a) => a.status === "pending");
   const usage = Object.fromEntries(Object.entries(usageH ?? {}).map(([k, v]) => [k, JSON.parse(v) as Record<string, number | string>]));
-  return { job, agents, approvals, claims: claims ?? {}, usage, lease };
+  return { job, agents, approvals, claims: claims ?? {}, usage, lease, files };
 }
 
 export async function getRateLimits(): Promise<RateLimitInfo[]> {
@@ -178,4 +183,62 @@ export async function isPaused(): Promise<boolean> {
 export async function deleteJobData(id: string): Promise<void> {
   const keys = jobKeys(id).filter((k) => k !== K.job(id));
   await redis().del(...keys);
+}
+
+// ---------------------------------------------------------------- attachments
+
+const UPLOAD_TTL_SECONDS = 24 * 60 * 60;
+
+/** Holds a file picked on the New job form until the job is created (or for a day). */
+export async function stageUpload(rawName: string, type: string, bytes: Uint8Array): Promise<Attachment> {
+  const meta: Attachment = { id: newId("f"), name: safeFileName(rawName), size: bytes.byteLength, type: type || "application/octet-stream", addedAt: Date.now() };
+  await redis().set(K.upload(meta.id), JSON.stringify({ meta, data: Buffer.from(bytes).toString("base64") }), { ex: UPLOAD_TTL_SECONDS });
+  return meta;
+}
+
+export async function listFiles(jobId: string): Promise<Attachment[]> {
+  const h = await hgetall(K.files(jobId));
+  return Object.values(h)
+    .map((v) => Attachment.safeParse(JSON.parse(v)))
+    .filter((p) => p.success)
+    .map((p) => p.data)
+    .sort((a, b) => a.addedAt - b.addedAt);
+}
+
+async function storeFile(jobId: string, meta: Attachment, base64: string, taken: Set<string>): Promise<Attachment> {
+  const m = { ...meta, name: uniqueFileName(meta.name, taken) };
+  taken.add(m.name);
+  const r = redis();
+  await r.hset(K.fileData(jobId), { [m.id]: base64 });
+  await r.hset(K.files(jobId), { [m.id]: JSON.stringify(m) });
+  await r.expire(K.fileData(jobId), TTL_SECONDS);
+  await r.expire(K.files(jobId), TTL_SECONDS);
+  return m;
+}
+
+/** Adds a file to an existing job. The daemon picks it up when a message references it. */
+export async function addJobFile(jobId: string, rawName: string, type: string, bytes: Uint8Array): Promise<Attachment> {
+  const existing = await listFiles(jobId);
+  if (existing.length >= MAX_ATTACHMENTS) throw new Error(`A job can have at most ${MAX_ATTACHMENTS} files.`);
+  const meta: Attachment = { id: newId("f"), name: safeFileName(rawName), size: bytes.byteLength, type: type || "application/octet-stream", addedAt: Date.now() };
+  return storeFile(jobId, meta, Buffer.from(bytes).toString("base64"), new Set(existing.map((f) => f.name)));
+}
+
+/** Moves staged uploads into a new job. Unknown or expired ids are an error so the user isn't surprised later. */
+export async function attachUploads(jobId: string, uploadIds: string[]): Promise<Attachment[]> {
+  const taken = new Set<string>();
+  const out: Attachment[] = [];
+  for (const id of uploadIds) {
+    const raw = await redis().get<string>(K.upload(id));
+    if (!raw) throw new Error("An attached file expired or failed to upload. Remove it and attach it again.");
+    const { meta, data } = JSON.parse(raw) as { meta: Attachment; data: string };
+    out.push(await storeFile(jobId, Attachment.parse(meta), data, taken));
+    await redis().del(K.upload(id));
+  }
+  return out;
+}
+
+export async function getFileData(jobId: string, fileId: string): Promise<Buffer | undefined> {
+  const v = await redis().hget<string>(K.fileData(jobId), fileId);
+  return v ? Buffer.from(v, "base64") : undefined;
 }

@@ -14,6 +14,7 @@ Rules for everyone:
 - Messages starting with [board] come from other agents. [user] comes from the user. [wdash] comes from the system.
 - Every edit is checked against file ownership. If an edit is denied because you don't own a path, don't work around it (no shell redirects, sed -i, cp, or similar). Ask for the path instead.
 - Shell commands other than the project's build/test commands and read-only git need the user's approval, which can take a long time. Prefer Read/Grep/Glob/Edit tools, and batch any shell work you really need.
+- Files the user attaches (documents, specs, data, images) are in \`.wdash/attachments/\` in your working directory. Treat them as reference material: read them, don't edit them, and don't copy them into the project unless the task asks for it. That folder is git-ignored. Read handles text, PDFs, and images; for other formats (e.g. .docx, .xlsx), extract the text with a shell command.
 - Use AskUserQuestion only when you're truly blocked on a decision that only the user can make.
 - Keep messages short and concrete.
 `;

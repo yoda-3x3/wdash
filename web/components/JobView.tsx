@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AgentRecord, Approval, Attention, JobRecord, WdEvent } from "@wdash/shared";
+import type { AgentRecord, Approval, Attachment, Attention, JobRecord, WdEvent } from "@wdash/shared";
 import { TERMINAL_STATUSES } from "@wdash/shared";
 import { api, timeAgo, usd, usePoll } from "@/lib/client";
 import { AttentionCard, Bar, LocationBadge, StatusChip } from "./bits";
+import { AttachButton, FileChips, dropProps, fmtSize, useUploads } from "./Attachments";
 
 type Detail = {
   job: JobRecord;
@@ -16,6 +17,7 @@ type Detail = {
   usage: Record<string, Record<string, number | string>>;
   lease: string | null;
   attention: Attention[];
+  files?: Attachment[];
 };
 
 const TABS = ["timeline", "team", "diff", "usage"] as const;
@@ -45,6 +47,7 @@ export function JobView({ id }: { id: string }) {
   return (
     <div className="space-y-4">
       <Header job={job} lease={detail.lease} onChange={refresh} />
+      <JobFiles jobId={id} files={detail.files ?? []} />
 
       {detail.attention.length > 0 && (
         <div className="space-y-2">
@@ -698,21 +701,43 @@ function fmt(n: unknown): string {
 
 // ---------------------------------------------------------------- chat
 
+function JobFiles({ jobId, files }: { jobId: string; files: Attachment[] }) {
+  if (!files.length) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <span className="text-muted">Files:</span>
+      {files.map((f) => (
+        <a key={f.id} href={`/api/jobs/${jobId}/files/${f.id}`} className="rounded-lg border border-line px-2 py-1 hover:border-accent" download={f.name}>
+          {f.name} <span className="text-muted">{fmtSize(f.size)}</span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
 function ChatBox({ jobId, agents }: { jobId: string; agents: AgentRecord[] }) {
   const [text, setText] = useState("");
   const [to, setTo] = useState("orchestrator");
   const [busy, setBusy] = useState(false);
+  const files = useUploads(`/api/jobs/${jobId}/files`);
   const live = agents.filter((a) => !["done", "stopped"].includes(a.status));
+  const canSend = !busy && !files.busy && (!!text.trim() || files.ready.length > 0);
   return (
     <form
-      className="sticky bottom-[calc(0.5rem+env(safe-area-inset-bottom))] z-10 flex gap-2 rounded-xl border border-line bg-panel p-2 shadow-lg"
+      className="sticky bottom-[calc(0.5rem+env(safe-area-inset-bottom))] z-10 space-y-2 rounded-xl border border-line bg-panel p-2 shadow-lg"
+      {...dropProps(files.add)}
       onSubmit={async (e) => {
         e.preventDefault();
-        if (!text.trim()) return;
+        if (!canSend) return;
         setBusy(true);
         try {
-          await api(`/api/jobs/${jobId}/cmd`, { cmd: { type: "user_message", text: text.trim(), agentId: to } });
+          const attachments = files.ready.map((f) => f.id);
+          const msg = text.trim() || `Attached: ${files.ready.map((f) => f.name).join(", ")}`;
+          await api(`/api/jobs/${jobId}/cmd`, {
+            cmd: { type: "user_message", text: msg, agentId: to, attachments: attachments.length ? attachments : undefined },
+          });
           setText("");
+          files.clear();
         } catch (err) {
           alert((err as Error).message);
         } finally {
@@ -720,19 +745,23 @@ function ChatBox({ jobId, agents }: { jobId: string; agents: AgentRecord[] }) {
         }
       }}
     >
-      {live.length > 1 && (
-        <select className="input w-auto max-w-32" value={to} onChange={(e) => setTo(e.target.value)}>
-          {live.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.id}
-            </option>
-          ))}
-        </select>
-      )}
-      <input className="input" placeholder={`Message ${to}…`} value={text} onChange={(e) => setText(e.target.value)} />
-      <button className="btn btn-primary" disabled={busy || !text.trim()}>
-        Send
-      </button>
+      <FileChips items={files.items} onRemove={files.remove} />
+      <div className="flex gap-2">
+        <AttachButton onFiles={files.add} compact />
+        {live.length > 1 && (
+          <select className="input w-auto max-w-32" value={to} onChange={(e) => setTo(e.target.value)}>
+            {live.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.id}
+              </option>
+            ))}
+          </select>
+        )}
+        <input className="input" placeholder={`Message ${to}…`} value={text} onChange={(e) => setText(e.target.value)} />
+        <button className="btn btn-primary" disabled={!canSend}>
+          Send
+        </button>
+      </div>
     </form>
   );
 }
