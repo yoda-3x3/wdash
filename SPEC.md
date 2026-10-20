@@ -305,10 +305,10 @@ De-dupe: at most one push per (job, reason) per 2 min; the inbox always has the 
 
 ## 12. Security
 
-- Auth.js GitHub provider; `signIn` callback rejects any GitHub user id ≠ `ALLOWED_GITHUB_ID`. All API routes check the session; no anonymous endpoints except push service-worker assets.
+- Auth.js GitHub provider; `signIn` callback rejects any GitHub login not in `ALLOWED_GITHUB_LOGIN` (comma-separated; every listed account has full control). All API routes check the session; no anonymous endpoints except push service-worker assets.
 - The relay token lives only in Vercel env, the home daemon, and repo secrets — never sent to the browser.
 - The daemon treats every relay command as untrusted input: zod-validated, and it can only act on allowlisted projects with the §8 policy. The worst case from a compromised web login is bounded by that policy (shell still needs approval, but that approval also comes through the web — so web auth is the real boundary).
-- The workflow dispatch token is a fine-grained PAT (Actions: write) scoped to allowlisted repos only.
+- The workflow dispatch token is a fine-grained PAT (Actions: write) scoped to allowlisted repos only. Repos owned by another account use that account's own PAT (`GITHUB_TOKEN_FOR_<OWNER>`).
 - Secrets for project builds live in each project repo's Actions secrets; the daemon never logs env vars, and tool output is scrubbed of known secret values before being emitted.
 - CSRF: same-site cookies + origin check on mutating routes.
 

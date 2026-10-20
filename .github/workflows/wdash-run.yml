@@ -1,5 +1,6 @@
 # Reusable workflow: runs one wdash job on a GitHub Actions runner (SPEC.md §3).
 # Called from each project's .github/workflows/wdash.yml (see templates/project-wdash.yml).
+# templates/project-wdash-standalone.yml inlines these steps for repos owned by other accounts: keep them in sync.
 name: wdash-run
 
 on:

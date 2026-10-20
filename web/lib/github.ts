@@ -2,14 +2,26 @@ import { gzipSync, gunzipSync } from "node:zlib";
 
 const API = "https://api.github.com";
 
-function headers(): HeadersInit {
-  const token = process.env.GITHUB_DISPATCH_TOKEN;
-  if (!token) throw new Error("GITHUB_DISPATCH_TOKEN is not set");
-  return { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
+/** Env var holding the token for repos owned by `owner`, e.g. "my-school" -> GITHUB_TOKEN_FOR_MY_SCHOOL. */
+export function ownerTokenVar(owner: string): string {
+  return `GITHUB_TOKEN_FOR_${owner.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
 }
 
-async function gh(path: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(`${API}${path}`, { ...init, headers: { ...headers(), ...(init.headers ?? {}) }, cache: "no-store" });
+/**
+ * A fine-grained token can only cover one account's repos, so repos owned by other accounts
+ * use their own token; everything else (and the archive) uses GITHUB_DISPATCH_TOKEN.
+ */
+function tokenFor(repo?: string): string {
+  const owner = repo?.split("/")[0];
+  const token = (owner && process.env[ownerTokenVar(owner)]) || process.env.GITHUB_DISPATCH_TOKEN;
+  if (!token) throw new Error("GITHUB_DISPATCH_TOKEN is not set");
+  return token;
+}
+
+/** `repo` picks the token; omit it for the wdash repo itself. */
+async function gh(path: string, init: RequestInit = {}, repo?: string): Promise<Response> {
+  const headers = { Authorization: `Bearer ${tokenFor(repo)}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
+  return fetch(`${API}${path}`, { ...init, headers: { ...headers, ...(init.headers ?? {}) }, cache: "no-store" });
 }
 
 /** Start the project's wdash.yml caller workflow for one job (SPEC.md §3). */
@@ -17,7 +29,7 @@ export async function dispatchCloudRun(repo: string, ref: string, jobId: string)
   const res = await gh(`/repos/${repo}/actions/workflows/wdash.yml/dispatches`, {
     method: "POST",
     body: JSON.stringify({ ref, inputs: { job_id: jobId } }),
-  });
+  }, repo);
   if (res.status !== 204) {
     const body = await res.text();
     throw new Error(`GitHub dispatch failed (${res.status}): ${body.slice(0, 300)}`);
@@ -25,11 +37,11 @@ export async function dispatchCloudRun(repo: string, ref: string, jobId: string)
 }
 
 export async function deleteBranch(repo: string, branch: string): Promise<void> {
-  await gh(`/repos/${repo}/git/refs/heads/${branch}`, { method: "DELETE" });
+  await gh(`/repos/${repo}/git/refs/heads/${branch}`, { method: "DELETE" }, repo);
 }
 
 export async function listBranches(repo: string, prefix: string): Promise<string[]> {
-  const res = await gh(`/repos/${repo}/git/matching-refs/heads/${prefix}`);
+  const res = await gh(`/repos/${repo}/git/matching-refs/heads/${prefix}`, {}, repo);
   if (!res.ok) return [];
   const refs = (await res.json()) as Array<{ ref: string }>;
   return refs.map((r) => r.ref.replace("refs/heads/", ""));

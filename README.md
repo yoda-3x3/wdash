@@ -18,6 +18,7 @@ browser ──► web/ (Next.js on Vercel, GitHub login) ──► Upstash Redis
 | `web/` | Dashboard, API routes, PWA + push, PC-offline failover |
 | `.github/workflows/wdash-run.yml` | Reusable workflow that runs one job in the cloud |
 | `templates/project-wdash.yml` | Caller workflow you copy into each project repo |
+| `templates/project-wdash-standalone.yml` | Same, for project repos owned by a different GitHub account |
 
 ---
 
@@ -37,7 +38,7 @@ Make the wdash repo **public** (it contains no secrets) so project repos can cal
 
 ### 3. Deploy the web app to Vercel
 Import the repo, set **Root Directory = `web`**, and add the variables from [`web/.env.example`](web/.env.example).
-`ALLOWED_GITHUB_LOGIN` is the only account that can sign in.
+Only the accounts in `ALLOWED_GITHUB_LOGIN` can sign in. It's a comma-separated list (e.g. `me,me-school`), and every listed account gets full control.
 
 **Failover cron:** Vercel Hobby crons run only daily, so point a free external scheduler (Upstash QStash schedule or cron-job.org) at
 `https://<your-app>.vercel.app/api/cron/reconcile` every 1–2 minutes with header `Authorization: Bearer <CRON_SECRET>`.
@@ -69,6 +70,12 @@ Keep the PC awake while plugged in (`powercfg /change standby-timeout-ac 0`).
 2. In the project repo's *Settings → Secrets → Actions* add:
    `CLAUDE_CODE_OAUTH_TOKEN`, `WDASH_REDIS_URL` (TCP string), and optionally `WDASH_VAPID_PUBLIC_KEY`, `WDASH_VAPID_PRIVATE_KEY`, `WDASH_WEB_URL`, plus any secrets your build needs.
 3. Set `"cloud": true` for it in `projects.json`. Projects with `"cloud": false` only ever run on the PC.
+
+#### Projects owned by another GitHub account
+A repo owned by a different account or org than the wdash repo (e.g. `my-school/robot`) works too, with three differences:
+- **Token:** fine-grained tokens only cover one account's repos. Signed in as that account, create a token with *Actions + Contents read/write* on its repos. `scripts/setup.mjs --vercel` asks for it and stores it on Vercel as `GITHUB_TOKEN_FOR_<OWNER>` (e.g. `GITHUB_TOKEN_FOR_MY_SCHOOL`). Repos without their own token use `GITHUB_DISPATCH_TOKEN`.
+- **Workflow:** GitHub won't let another account's repo call a private reusable workflow, so copy [`templates/project-wdash-standalone.yml`](templates/project-wdash-standalone.yml) instead. Its `WDASH_REPO_TOKEN` secret (set by setup) lets it check out wdash.
+- **Secrets and pushes:** setting the repo's Actions secrets needs admin on it, so `gh` must be signed in as that account (`gh auth login` / `gh auth switch`) when you run setup. On the PC, the daemon pushes with your normal git credentials, so git needs push access to that repo too.
 
 ### 6. Phone
 Open the site, then **Settings → Enable notifications**. On iPhone, add it to the Home Screen first and open it from there.

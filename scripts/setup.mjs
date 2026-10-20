@@ -79,7 +79,19 @@ save();
 console.log("\nwdash setup — README.md 'Setup' explains where each value comes from.\n");
 
 const ghLogin = sh("gh", ["api", "user", "-q", ".login"]);
-const login = await need("ALLOWED_GITHUB_LOGIN", "GitHub login allowed to sign in", { def: ghLogin.ok ? ghLogin.out : undefined });
+const logins = (
+  await need("ALLOWED_GITHUB_LOGIN", "GitHub logins allowed to sign in (comma separated, yours first)", {
+    def: ghLogin.ok ? ghLogin.out : undefined,
+    check: (v) => /^[A-Za-z0-9-]+(\s*,\s*[A-Za-z0-9-]+)*$/.test(v),
+    hint: "GitHub usernames separated by commas, e.g. me,me-school",
+  })
+)
+  .split(",")
+  .map((s) => s.trim())
+  .join(",");
+state.ALLOWED_GITHUB_LOGIN = logins;
+// The first login owns the wdash repo by default and signs push notifications.
+const login = logins.split(",")[0];
 const webUrl = (
   await need("WEB_URL", "Vercel URL of the dashboard (e.g. https://wdash-you.vercel.app)", { check: (v) => /^https:\/\/[^/]+$/.test(v.replace(/\/$/, "")), hint: "use the https:// origin, no path" })
 ).replace(/\/$/, "");
@@ -131,6 +143,31 @@ const cloudRepos = projects.filter((p) => p.cloud !== false).map((p) => p.repo);
 const reposIn = await ask("Project repos that run in the cloud (comma separated)", { def: cloudRepos.join(",") || state.PROJECT_REPOS });
 state.PROJECT_REPOS = reposIn;
 save();
+
+// A fine-grained token only covers one account's repos, so each other owner needs its own.
+const repoList = reposIn.split(",").map((s) => s.trim()).filter(Boolean);
+const wdashOwner = wdashRepo.split("/")[0].toLowerCase();
+const otherOwners = [...new Set(repoList.map((r) => r.split("/")[0]).filter((o) => o.toLowerCase() !== wdashOwner))];
+const ownerTokens = {};
+for (const o of otherOwners) {
+  const key = `GITHUB_TOKEN_FOR_${o.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+  const sample = repoList.find((r) => r.split("/")[0] === o);
+  console.log(`\n${sample} is owned by ${o}. Sign in to GitHub as ${o} and create a fine-grained token for its repos (Actions + Contents read/write).`);
+  for (;;) {
+    const tok = await need(key, `Fine-grained token for ${o}'s repos`, {
+      secret: true,
+      check: (v) => /^(github_pat_|ghp_)[A-Za-z0-9_]{30,}$/.test(v),
+      hint: "the token starts with github_pat_ and has no spaces — paste it once (input is hidden)",
+    });
+    const res = await fetch(`https://api.github.com/repos/${sample}`, { headers: { Authorization: `Bearer ${tok}` } }).catch(() => null);
+    if (res?.ok) {
+      ownerTokens[key] = tok;
+      break;
+    }
+    console.log(`  ✗ That token can't see ${sample} (${res ? res.status : "network error"}). Paste it again.`);
+    delete state[key];
+  }
+}
 rl.close();
 
 // ---------------------------------------------------------------- write local env files
@@ -153,7 +190,7 @@ console.log("\n✓ wrote daemon/.env");
 const webEnv = {
   GITHUB_ID: state.GITHUB_ID,
   GITHUB_SECRET: state.GITHUB_SECRET,
-  ALLOWED_GITHUB_LOGIN: login,
+  ALLOWED_GITHUB_LOGIN: logins,
   NEXTAUTH_SECRET: state.NEXTAUTH_SECRET,
   NEXTAUTH_URL: webUrl,
   ...(state.UPSTASH_REDIS_REST_URL ? { UPSTASH_REDIS_REST_URL: state.UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN: state.UPSTASH_REDIS_REST_TOKEN } : {}),
@@ -163,6 +200,7 @@ const webEnv = {
   VAPID_PRIVATE_KEY: state.VAPID_PRIVATE_KEY,
   VAPID_SUBJECT: `mailto:${login}@users.noreply.github.com`,
   CRON_SECRET: state.CRON_SECRET,
+  ...ownerTokens,
 };
 writeFileSync(
   join(root, "web", ".env.local"),
@@ -189,7 +227,8 @@ const repoSecrets = {
   // Needed because the wdash repo is private: lets the runner check out wdash.
   WDASH_REPO_TOKEN: state.GITHUB_DISPATCH_TOKEN,
 };
-for (const repo of reposIn.split(",").map((s) => s.trim()).filter(Boolean)) {
+for (const repo of repoList) {
+  const other = repo.split("/")[0].toLowerCase() !== wdashOwner;
   let ok = true;
   for (const [name, value] of Object.entries(repoSecrets)) {
     const r = sh("gh", ["secret", "set", name, "-R", repo], value);
@@ -199,6 +238,8 @@ for (const repo of reposIn.split(",").map((s) => s.trim()).filter(Boolean)) {
     }
   }
   if (ok) console.log(`✓ ${repo}: Actions secrets set`);
+  else if (other) console.log(`  Setting secrets needs admin on ${repo}: run \`gh auth login\` as ${repo.split("/")[0]} (or \`gh auth switch\`), then re-run setup.`);
+  if (other) console.log(`  ${repo} needs templates/project-wdash-standalone.yml as .github/workflows/wdash.yml (not project-wdash.yml).`);
 }
 
 // ---------------------------------------------------------------- Vercel

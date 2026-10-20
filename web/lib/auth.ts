@@ -2,12 +2,15 @@ import { getServerSession, type AuthOptions } from "next-auth";
 import GitHubProvider from "next-auth/providers/github";
 import { NextResponse } from "next/server";
 
-// SPEC.md §12 — exactly one GitHub account may sign in.
+// SPEC.md §12 — only the GitHub accounts listed in ALLOWED_GITHUB_LOGIN (comma separated) may sign in.
 
-function allowedLogin(): string {
-  const v = process.env.ALLOWED_GITHUB_LOGIN?.trim().toLowerCase();
-  if (!v) throw new Error("ALLOWED_GITHUB_LOGIN is not set");
-  return v;
+function allowedLogins(): Set<string> {
+  const v = (process.env.ALLOWED_GITHUB_LOGIN ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  if (!v.length) throw new Error("ALLOWED_GITHUB_LOGIN is not set");
+  return new Set(v);
 }
 
 export const authOptions: AuthOptions = {
@@ -23,7 +26,7 @@ export const authOptions: AuthOptions = {
   callbacks: {
     async signIn({ profile }) {
       const login = String((profile as { login?: string } | undefined)?.login ?? "").toLowerCase();
-      return login === allowedLogin();
+      return allowedLogins().has(login);
     },
     async jwt({ token, profile }) {
       if (profile) token.login = String((profile as { login?: string }).login ?? "").toLowerCase();
@@ -40,7 +43,7 @@ export async function currentLogin(): Promise<string | null> {
   try {
     const s = await getServerSession(authOptions);
     const login = (s as { login?: string } | null)?.login;
-    return login && login === allowedLogin() ? login : null;
+    return login && allowedLogins().has(login) ? login : null;
   } catch (e) {
     // Misconfiguration (e.g. ALLOWED_GITHUB_LOGIN unset) must fail closed, not 500.
     console.error("auth:", (e as Error).message);
