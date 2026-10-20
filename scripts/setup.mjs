@@ -86,7 +86,11 @@ const webUrl = (
 state.WEB_URL = webUrl;
 console.log(`\nGitHub OAuth app callback URL must be: ${webUrl}/api/auth/callback/github`);
 await need("GITHUB_ID", "GitHub OAuth app Client ID");
-await need("GITHUB_SECRET", "GitHub OAuth app Client secret", { secret: true });
+await need("GITHUB_SECRET", "GitHub OAuth app Client secret", {
+  secret: true,
+  check: (v) => /^[0-9a-f]{40}$/.test(v),
+  hint: "a client secret is exactly 40 hex characters — paste it once (input is hidden)",
+});
 const viaVercel = /^y/i.test(await ask("Did you create Redis through Vercel's Upstash integration? (y/n)", { def: state.REDIS_VIA_VERCEL ?? "y" }));
 state.REDIS_VIA_VERCEL = viaVercel ? "y" : "n";
 if (viaVercel) {
