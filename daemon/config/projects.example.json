@@ -1,0 +1,15 @@
+[
+  {
+    "name": "wdash-sandbox",
+    "repo": "YOUR_GITHUB_LOGIN/wdash-sandbox",
+    "baseBranch": "main",
+    "localPath": "C:\Users\you\code\wdash-sandbox",
+    "commands": {
+      "install": "npm ci",
+      "build": "npm run build",
+      "test": "npm test"
+    },
+    "defaultBudgetUsd": 3,
+    "cloud": true
+  }
+]

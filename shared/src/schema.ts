@@ -1,0 +1,232 @@
+import { z } from "zod";
+
+// ---------- Projects ----------
+
+export const ProjectConfig = z.object({
+  name: z.string().regex(/^[a-zA-Z0-9._-]+$/),
+  repo: z.string().regex(/^[^/\s]+\/[^/\s]+$/), // "owner/name"
+  baseBranch: z.string().default("main"),
+  /** Absolute path on the home PC. Never used by the cloud runner. */
+  localPath: z.string().optional(),
+  commands: z
+    .object({
+      install: z.string().optional(),
+      build: z.string().optional(),
+      test: z.string().optional(),
+      /** Command that writes a PNG to $WDASH_SCREENSHOT (UI projects). */
+      screenshot: z.string().optional(),
+    })
+    .default({}),
+  defaultBudgetUsd: z.number().positive().default(5),
+  /** Whether a GitHub Actions caller workflow is installed in the repo. */
+  cloud: z.boolean().default(true),
+});
+export type ProjectConfig = z.infer<typeof ProjectConfig>;
+
+// ---------- Jobs ----------
+
+export const JobStatus = z.enum([
+  "queued",
+  "planning",
+  "awaiting_plan_approval",
+  "running",
+  "waiting_on_user",
+  "reviewing",
+  "merging",
+  "paused",
+  "over_budget",
+  "done",
+  "failed",
+  "cancelled",
+]);
+export type JobStatus = z.infer<typeof JobStatus>;
+
+export const TERMINAL_STATUSES: JobStatus[] = ["done", "failed", "cancelled"];
+
+export const JobLocation = z.enum(["queued", "home", "cloud", "migrating"]);
+export type JobLocation = z.infer<typeof JobLocation>;
+
+export const RunOn = z.enum(["auto", "home", "cloud"]);
+
+export const MergeState = z.enum(["none", "pending", "merged", "needs_merge", "left_as_branch", "discarded"]);
+
+export const ModelPreset = z.enum(["opus-sonnet", "opus-opus", "sonnet-haiku"]);
+export type ModelPreset = z.infer<typeof ModelPreset>;
+
+export const MODEL_PRESETS: Record<ModelPreset, { orchestrator: string; worker: string; label: string }> = {
+  "opus-sonnet": { orchestrator: "opus", worker: "sonnet", label: "Opus orchestrator + Sonnet workers" },
+  "opus-opus": { orchestrator: "opus", worker: "opus", label: "Opus everywhere" },
+  "sonnet-haiku": { orchestrator: "sonnet", worker: "haiku", label: "Sonnet orchestrator + Haiku workers" },
+};
+
+const num = z.coerce.number();
+const bool = z.preprocess((v) => v === true || v === "true" || v === "1", z.boolean());
+
+export const JobRecord = z.object({
+  id: z.string(),
+  project: z.string(),
+  task: z.string(),
+  title: z.string(),
+  status: JobStatus,
+  location: JobLocation,
+  runOn: RunOn.default("auto"),
+  models: ModelPreset.default("opus-sonnet"),
+  workers: z.string().default("auto"), // "auto" | "1".."4"
+  budgetUsd: num,
+  reviewCap: num.default(3),
+  costUsd: num.default(0),
+  createdAt: num,
+  updatedAt: num,
+  summary: z.string().optional(),
+  error: z.string().optional(),
+  lastCheckpointSha: z.string().optional(),
+  cloudRunUrl: z.string().optional(),
+  dispatchedAt: num.optional(),
+  /** Last command-stream id the daemon handled, so a new runner continues where the last left off. */
+  cmdCursor: z.string().optional(),
+  mergeState: MergeState.default("none"),
+  archived: bool.default(false),
+});
+export type JobRecord = z.infer<typeof JobRecord>;
+
+export const NewJobInput = z.object({
+  project: z.string().min(1),
+  task: z.string().min(1).max(20_000),
+  runOn: RunOn.default("auto"),
+  models: ModelPreset.default("opus-sonnet"),
+  workers: z.enum(["auto", "1", "2", "3", "4"]).default("auto"),
+  budgetUsd: z.number().positive().max(500).optional(),
+  reviewCap: z.number().int().min(1).max(10).default(3),
+});
+export type NewJobInput = z.infer<typeof NewJobInput>;
+
+// ---------- Agents ----------
+
+export const AgentRole = z.enum(["orchestrator", "worker"]);
+export const AgentStatus = z.enum([
+  "starting",
+  "running",
+  "idle",
+  "waiting_on_user",
+  "waiting_on_approval",
+  "reviewing",
+  "done",
+  "failed",
+  "stopped",
+]);
+export type AgentStatus = z.infer<typeof AgentStatus>;
+
+export const AgentRecord = z.object({
+  id: z.string(),
+  role: AgentRole,
+  model: z.string(),
+  name: z.string(),
+  task: z.string().default(""),
+  globs: z.array(z.string()).default([]),
+  status: AgentStatus,
+  sessionId: z.string().optional(),
+  branch: z.string().optional(),
+  reviewRounds: z.number().default(0),
+  lastEventAt: z.number().default(0),
+  costUsd: z.number().default(0),
+});
+export type AgentRecord = z.infer<typeof AgentRecord>;
+
+// ---------- Events (daemon -> UI) ----------
+
+export const EventType = z.enum([
+  "message",
+  "tool_call",
+  "tool_result",
+  "permission_request",
+  "permission_decision",
+  "question",
+  "plan",
+  "board",
+  "review",
+  "artifact",
+  "diff",
+  "status",
+  "usage",
+  "checkpoint",
+  "attention",
+  "attention_cleared",
+  "error",
+  "info",
+]);
+export type EventType = z.infer<typeof EventType>;
+
+export const WdEvent = z.object({
+  id: z.string().optional(), // stream id, filled on read
+  ts: z.number(),
+  jobId: z.string(),
+  agentId: z.string().optional(),
+  /** Subagent (Explore/Plan/…) id inside an agent, for the nested tree. */
+  subagentId: z.string().optional(),
+  subagentType: z.string().optional(),
+  type: EventType,
+  payload: z.record(z.string(), z.unknown()),
+});
+export type WdEvent = z.infer<typeof WdEvent>;
+
+// ---------- Commands (UI -> daemon) ----------
+
+export const Command = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("user_message"), text: z.string().min(1).max(20_000), agentId: z.string().optional() }),
+  z.object({
+    type: z.literal("decide"),
+    requestId: z.string(),
+    allow: z.boolean(),
+    scope: z.enum(["once", "job"]).default("once"),
+    message: z.string().max(2000).optional(),
+  }),
+  z.object({
+    type: z.literal("answer"),
+    requestId: z.string(),
+    answers: z.record(z.string(), z.string()),
+  }),
+  z.object({ type: z.literal("approve_plan"), edits: z.string().max(10_000).optional() }),
+  z.object({ type: z.literal("cancel") }),
+  z.object({ type: z.literal("pause") }),
+  z.object({ type: z.literal("resume") }),
+  z.object({ type: z.literal("raise_budget"), budgetUsd: z.number().positive().max(500) }),
+  z.object({ type: z.literal("retry_agent"), agentId: z.string() }),
+  z.object({ type: z.literal("nudge"), agentId: z.string(), text: z.string().max(2000).optional() }),
+  z.object({ type: z.literal("accept_review"), agentId: z.string() }),
+  z.object({ type: z.literal("guidance"), agentId: z.string(), text: z.string().min(1).max(10_000) }),
+]);
+export type Command = z.infer<typeof Command>;
+
+// ---------- Approvals ----------
+
+export const Approval = z.object({
+  requestId: z.string(),
+  jobId: z.string(),
+  agentId: z.string(),
+  kind: z.enum(["permission", "question"]),
+  tool: z.string(),
+  input: z.record(z.string(), z.unknown()),
+  title: z.string(),
+  status: z.enum(["pending", "allowed", "denied", "answered", "expired"]),
+  createdAt: z.number(),
+  decidedAt: z.number().optional(),
+});
+export type Approval = z.infer<typeof Approval>;
+
+// ---------- Usage ----------
+
+export const RateLimitInfo = z.object({
+  status: z.string(),
+  rateLimitType: z.string().optional(),
+  utilization: z.number().optional(),
+  resetsAt: z.number().optional(),
+  updatedAt: z.number(),
+});
+export type RateLimitInfo = z.infer<typeof RateLimitInfo>;
+
+// ---------- Push ----------
+
+export const PushSubscriptionJson = z.object({
+  endpoint: z.string().url(),
+  keys: z.object({ p256dh: z.string(), auth: z.string() }),
+});

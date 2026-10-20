@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.next/
+.env
+.env.local
+daemon/config/projects.json
+daemon/.state/
+*.log
+.env*.local
+*.tsbuildinfo
+.vercel/
+.wdash-setup.json

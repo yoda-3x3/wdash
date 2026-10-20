@@ -1,0 +1,82 @@
+# Reusable workflow: runs one wdash job on a GitHub Actions runner (SPEC.md §3).
+# Called from each project's .github/workflows/wdash.yml (see templates/project-wdash.yml).
+name: wdash-run
+
+on:
+  workflow_call:
+    inputs:
+      job_id:
+        required: true
+        type: string
+      wdash_repo:
+        description: "owner/name of the wdash repo"
+        required: true
+        type: string
+      wdash_ref:
+        required: false
+        type: string
+        default: main
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      WDASH_REDIS_URL:
+        required: true
+      WDASH_VAPID_PUBLIC_KEY:
+        required: false
+      WDASH_VAPID_PRIVATE_KEY:
+        required: false
+      WDASH_WEB_URL:
+        required: false
+      WDASH_REPO_TOKEN:
+        description: "Only needed if the wdash repo is private"
+        required: false
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    permissions:
+      contents: write
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+        with:
+          path: project
+          fetch-depth: 0
+
+      - name: Check out wdash
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.wdash_repo }}
+          ref: ${{ inputs.wdash_ref }}
+          path: wdash
+          token: ${{ secrets.WDASH_REPO_TOKEN || github.token }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: wdash/package-lock.json
+
+      - name: Build daemon
+        working-directory: wdash
+        run: |
+          npm ci --workspace shared --workspace daemon --include-workspace-root
+          npm run build -w shared
+          npm run build -w daemon
+
+      - name: Git identity
+        working-directory: project
+        run: |
+          git config user.name "wdash"
+          git config user.email "wdash@users.noreply.github.com"
+
+      - name: Run job
+        env:
+          WDASH_REDIS_URL: ${{ secrets.WDASH_REDIS_URL }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          VAPID_PUBLIC_KEY: ${{ secrets.WDASH_VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.WDASH_VAPID_PRIVATE_KEY }}
+          WDASH_WEB_URL: ${{ secrets.WDASH_WEB_URL }}
+          WDASH_STATE_DIR: ${{ runner.temp }}/wdash
+        run: node wdash/daemon/dist/main.js cloud --job "${{ inputs.job_id }}" --repo project

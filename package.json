@@ -1,0 +1,11 @@
+{
+  "name": "wdash",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["shared", "daemon", "web"],
+  "scripts": {
+    "build": "npm run build -w shared && npm run build -w daemon && npm run build -w web",
+    "typecheck": "npm run build -w shared && npm run typecheck -w daemon && npm run typecheck -w web",
+    "test": "npm run build -w shared && npm test -w daemon"
+  }
+}

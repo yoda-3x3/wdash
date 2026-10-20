@@ -1,0 +1,181 @@
+import {
+  K,
+  TTL_SECONDS,
+  jobKeys,
+  newId,
+  AgentRecord,
+  Approval,
+  JobRecord,
+  ProjectConfig,
+  RateLimitInfo,
+  WdEvent,
+  type Command,
+  type EventType,
+  type NewJobInput,
+} from "@wdash/shared";
+import { hgetall, redis, xrange, xrevrange } from "./redis";
+
+// Data access for the web app. Mirrors daemon/src/relay.ts over Upstash REST.
+
+export async function emit(jobId: string, type: EventType, payload: Record<string, unknown>): Promise<void> {
+  const ev = { ts: Date.now(), jobId, type, payload };
+  await redis().xadd(K.events(jobId), "*", { e: JSON.stringify(ev) }, { trim: { type: "MAXLEN", threshold: 20000, comparison: "~" } });
+}
+
+export async function getJob(id: string): Promise<JobRecord | undefined> {
+  const h = await hgetall(K.job(id));
+  if (!h || !h.id) return undefined;
+  const p = JobRecord.safeParse(h);
+  return p.success ? p.data : undefined;
+}
+
+export async function updateJob(id: string, patch: Record<string, string | number | boolean | undefined>): Promise<void> {
+  const flat: Record<string, string> = { updatedAt: String(Date.now()) };
+  for (const [k, v] of Object.entries(patch)) if (v !== undefined) flat[k] = String(v);
+  const r = redis();
+  await r.hset(K.job(id), flat);
+  await r.zadd(K.jobs, { score: Date.now(), member: id });
+}
+
+export async function setStatus(id: string, status: JobRecord["status"], extra: Record<string, string> = {}): Promise<void> {
+  await updateJob(id, { status, ...extra });
+  await emit(id, "status", { status, ...extra });
+}
+
+export async function listJobs(limit = 60): Promise<JobRecord[]> {
+  const ids = await redis().zrange<string[]>(K.jobs, 0, limit - 1, { rev: true });
+  const jobs = await Promise.all(ids.map((id) => getJob(id)));
+  return jobs.filter((j): j is JobRecord => !!j);
+}
+
+export async function getProjects(): Promise<ProjectConfig[]> {
+  const h = (await hgetall(K.projects)) ?? {};
+  return Object.values(h)
+    .map((v) => ProjectConfig.safeParse(JSON.parse(v)))
+    .filter((p) => p.success)
+    .map((p) => p.data)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function getProject(name: string): Promise<ProjectConfig | undefined> {
+  const v = await redis().hget<string>(K.projects, name);
+  return v ? ProjectConfig.parse(JSON.parse(v)) : undefined;
+}
+
+export async function homeOnline(): Promise<{ online: boolean; lastSeen?: number }> {
+  const v = await redis().get<string>(K.homeHeartbeat);
+  return { online: !!v, lastSeen: v ? Number(v) : undefined };
+}
+
+export async function createJob(input: NewJobInput, project: ProjectConfig): Promise<JobRecord> {
+  const id = newId("j");
+  const now = Date.now();
+  const title = input.task.split("\n")[0]!.slice(0, 80);
+  const job: JobRecord = JobRecord.parse({
+    id,
+    project: project.name,
+    task: input.task,
+    title,
+    status: "queued",
+    location: "queued",
+    runOn: input.runOn,
+    models: input.models,
+    workers: input.workers,
+    budgetUsd: input.budgetUsd ?? project.defaultBudgetUsd,
+    reviewCap: input.reviewCap,
+    costUsd: 0,
+    createdAt: now,
+    updatedAt: now,
+    mergeState: "none",
+    archived: false,
+  });
+  const flat: Record<string, string> = {};
+  for (const [k, v] of Object.entries(job)) if (v !== undefined) flat[k] = String(v);
+  const r = redis();
+  await r.hset(K.job(id), flat);
+  await r.expire(K.job(id), TTL_SECONDS);
+  await r.zadd(K.jobs, { score: now, member: id });
+  await emit(id, "info", { text: `Job created for ${project.name}` });
+  return job;
+}
+
+export async function pushCommand(jobId: string, cmd: Command): Promise<void> {
+  await redis().xadd(K.cmd(jobId), "*", { c: JSON.stringify(cmd) }, { trim: { type: "MAXLEN", threshold: 2000, comparison: "~" } });
+  await redis().expire(K.cmd(jobId), TTL_SECONDS);
+}
+
+/** Events strictly after `after` (a stream id), oldest first. */
+export async function getEvents(jobId: string, after = "-", count = 400): Promise<WdEvent[]> {
+  const start = after === "-" ? "-" : `(${after}`;
+  const out: WdEvent[] = [];
+  for (const [id, fields] of await xrange(K.events(jobId), start, "+", count)) {
+    const e = parseEvent(id, fields);
+    if (e) out.push(e);
+  }
+  return out;
+}
+
+function parseEvent(id: string, fields: Record<string, string>): WdEvent | undefined {
+  try {
+    const p = WdEvent.safeParse({ ...JSON.parse(fields.e!), id });
+    return p.success ? p.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The newest `count` events, oldest first (initial backfill for the wall). */
+export async function getRecentEvents(jobId: string, count: number): Promise<WdEvent[]> {
+  const rows = await xrevrange(K.events(jobId), "+", "-", count);
+  return rows
+    .map(([id, f]) => parseEvent(id, f))
+    .filter((e): e is WdEvent => !!e)
+    .reverse();
+}
+
+export async function getAgents(jobId: string): Promise<AgentRecord[]> {
+  return Object.values(await hgetall(K.agents(jobId)))
+    .map((v) => AgentRecord.safeParse(JSON.parse(v)))
+    .filter((p) => p.success)
+    .map((p) => p.data);
+}
+
+export async function getJobDetail(id: string) {
+  const r = redis();
+  const [job, agentsH, approvalsH, claims, usageH, lease] = await Promise.all([
+    getJob(id),
+    hgetall(K.agents(id)),
+    hgetall(K.approvals(id)),
+    hgetall(K.claims(id)),
+    hgetall(K.usage(id)),
+    r.get<string>(K.lease(id)),
+  ]);
+  const agents = Object.values(agentsH ?? {})
+    .map((v) => AgentRecord.safeParse(JSON.parse(v)))
+    .filter((p) => p.success)
+    .map((p) => p.data);
+  const approvals = Object.values(approvalsH ?? {})
+    .map((v) => Approval.safeParse(JSON.parse(v)))
+    .filter((p) => p.success)
+    .map((p) => p.data)
+    .filter((a) => a.status === "pending");
+  const usage = Object.fromEntries(Object.entries(usageH ?? {}).map(([k, v]) => [k, JSON.parse(v) as Record<string, number | string>]));
+  return { job, agents, approvals, claims: claims ?? {}, usage, lease };
+}
+
+export async function getRateLimits(): Promise<RateLimitInfo[]> {
+  const h = (await hgetall(K.rateLimit)) ?? {};
+  return Object.values(h)
+    .map((v) => RateLimitInfo.safeParse(JSON.parse(v)))
+    .filter((p) => p.success)
+    .map((p) => p.data);
+}
+
+export async function isPaused(): Promise<boolean> {
+  return (await redis().get<string>(K.paused)) === "1";
+}
+
+export async function deleteJobData(id: string): Promise<void> {
+  const keys = jobKeys(id).filter((k) => k !== K.job(id));
+  await redis().del(...keys);
+}

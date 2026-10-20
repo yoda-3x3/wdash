@@ -1,0 +1,160 @@
+import { execFile } from "node:child_process";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { branchFor } from "@wdash/shared";
+
+const run = promisify(execFile);
+
+export class GitError extends Error {
+  constructor(
+    message: string,
+    readonly stderr: string,
+  ) {
+    super(message);
+  }
+}
+
+export async function git(cwd: string, ...args: string[]): Promise<string> {
+  try {
+    const { stdout } = await run("git", args, { cwd, maxBuffer: 64 * 1024 * 1024, windowsHide: true });
+    return stdout.trimEnd();
+  } catch (e) {
+    const err = e as { stderr?: string; message: string };
+    throw new GitError(`git ${args.join(" ")} failed: ${err.stderr || err.message}`, err.stderr ?? "");
+  }
+}
+
+async function tryGit(cwd: string, ...args: string[]): Promise<string | undefined> {
+  try {
+    return await git(cwd, ...args);
+  } catch {
+    return undefined;
+  }
+}
+
+async function refExists(repo: string, ref: string): Promise<boolean> {
+  return (await tryGit(repo, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`)) !== undefined;
+}
+
+export async function fetchAll(repo: string): Promise<void> {
+  await tryGit(repo, "fetch", "--prune", "origin");
+}
+
+/**
+ * Make sure `branch` exists locally: prefer an existing local branch, then origin/<branch>,
+ * otherwise create it from `from`.
+ */
+async function ensureBranch(repo: string, branch: string, from: string): Promise<void> {
+  if (await refExists(repo, `refs/heads/${branch}`)) return;
+  if (await refExists(repo, `refs/remotes/origin/${branch}`)) {
+    await git(repo, "branch", branch, `origin/${branch}`);
+    return;
+  }
+  await git(repo, "branch", branch, from);
+}
+
+export async function addWorktree(repo: string, path: string, branch: string, from: string): Promise<string> {
+  await ensureBranch(repo, branch, from);
+  if (existsSync(join(path, ".git"))) return path;
+  mkdirSync(join(path, ".."), { recursive: true });
+  await tryGit(repo, "worktree", "prune");
+  await git(repo, "worktree", "add", path, branch);
+  return path;
+}
+
+export async function removeWorktree(repo: string, path: string): Promise<void> {
+  await tryGit(repo, "worktree", "remove", "--force", path);
+  if (existsSync(path)) rmSync(path, { recursive: true, force: true });
+}
+
+/** Base ref for a new job: local base branch at home (may have unpushed work), origin/<base> in the cloud. */
+export async function baseRef(repo: string, baseBranch: string, mode: "home" | "cloud"): Promise<string> {
+  if (mode === "home" && (await refExists(repo, `refs/heads/${baseBranch}`))) return baseBranch;
+  if (await refExists(repo, `refs/remotes/origin/${baseBranch}`)) return `origin/${baseBranch}`;
+  return "HEAD";
+}
+
+/** WIP commit of everything in the worktree. Returns the new sha, or undefined if nothing changed. */
+export async function checkpointCommit(worktree: string, message: string): Promise<string | undefined> {
+  await git(worktree, "add", "-A");
+  const staged = await git(worktree, "diff", "--cached", "--name-only");
+  if (!staged) return undefined;
+  await git(worktree, "commit", "-m", message);
+  return git(worktree, "rev-parse", "HEAD");
+}
+
+export async function pushBranches(repo: string, branches: string[]): Promise<void> {
+  if (!branches.length) return;
+  await git(repo, "push", "origin", ...branches.map((b) => `refs/heads/${b}:refs/heads/${b}`));
+}
+
+export async function head(worktree: string): Promise<string> {
+  return git(worktree, "rev-parse", "HEAD");
+}
+
+export type DiffResult = { base: string; files: Array<{ status: string; path: string }>; stat: string; patch: string };
+
+export async function diffAgainst(worktree: string, against: string, maxBytes = 400_000): Promise<DiffResult> {
+  const base = (await tryGit(worktree, "merge-base", against, "HEAD")) ?? against;
+  const nameStatus = await git(worktree, "diff", "--name-status", base, "HEAD");
+  const stat = await git(worktree, "diff", "--stat", base, "HEAD");
+  let patch = await git(worktree, "diff", base, "HEAD");
+  if (patch.length > maxBytes) patch = `${patch.slice(0, maxBytes)}\n… diff truncated (${patch.length} bytes)`;
+  const files = nameStatus
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => {
+      const [status, ...rest] = l.split("\t");
+      return { status: status ?? "?", path: rest.join(" -> ") };
+    });
+  return { base, files, stat, patch };
+}
+
+/** Merge `branch` into the worktree's current branch. On conflict, aborts and returns conflicting paths. */
+export async function mergeInto(worktree: string, branch: string, message: string): Promise<{ ok: true } | { ok: false; conflicts: string[] }> {
+  try {
+    await git(worktree, "merge", "--no-ff", "-m", message, branch);
+    return { ok: true };
+  } catch {
+    const conflicts = ((await tryGit(worktree, "diff", "--name-only", "--diff-filter=U")) ?? "").split("\n").filter(Boolean);
+    await tryGit(worktree, "merge", "--abort");
+    return { ok: false, conflicts };
+  }
+}
+
+export type SyncOutcome =
+  | { kind: "merged"; sha: string }
+  | { kind: "needs_merge"; why: string; conflicts?: string[] }
+  | { kind: "missing" };
+
+/**
+ * Sync a finished job branch into the user's own checkout on the home PC (SPEC.md §10):
+ * merge automatically only if the checkout is on the base branch, clean, and the merge is clean.
+ */
+export async function syncIntoCheckout(localPath: string, baseBranch: string, jobId: string): Promise<SyncOutcome> {
+  await fetchAll(localPath);
+  const branch = branchFor.main(jobId);
+  const ref = (await refExists(localPath, `refs/remotes/origin/${branch}`))
+    ? `origin/${branch}`
+    : (await refExists(localPath, `refs/heads/${branch}`))
+      ? branch
+      : undefined;
+  if (!ref) return { kind: "missing" };
+  // Keep a local branch either way, so "leave as branch" always works.
+  if (ref.startsWith("origin/")) await tryGit(localPath, "branch", "-f", branch, ref);
+
+  const current = await git(localPath, "rev-parse", "--abbrev-ref", "HEAD");
+  if (current !== baseBranch) return { kind: "needs_merge", why: `Your checkout is on '${current}', not '${baseBranch}'.` };
+  const dirty = await git(localPath, "status", "--porcelain", "--untracked-files=no");
+  if (dirty) return { kind: "needs_merge", why: "Your checkout has uncommitted changes." };
+
+  try {
+    await git(localPath, "merge", "--no-edit", branch);
+    return { kind: "merged", sha: await head(localPath) };
+  } catch {
+    const conflicts = ((await tryGit(localPath, "diff", "--name-only", "--diff-filter=U")) ?? "").split("\n").filter(Boolean);
+    await tryGit(localPath, "merge", "--abort");
+    return { kind: "needs_merge", why: "Merge conflicts with your local branch.", conflicts };
+  }
+}
