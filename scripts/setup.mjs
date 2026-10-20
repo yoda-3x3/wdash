@@ -103,8 +103,23 @@ if (viaVercel) {
   await need("UPSTASH_REDIS_REST_TOKEN", "Upstash REST token", { secret: true });
 }
 await need("WDASH_REDIS_URL", "Redis TCP URL (rediss://default:...@...:6379)", { secret: true, check: (v) => /^rediss?:\/\//.test(v), hint: "starts with rediss://" });
-await need("GITHUB_DISPATCH_TOKEN", "Fine-grained GitHub token (Actions + Contents read/write on wdash and project repos)", { secret: true });
-await need("CLAUDE_CODE_OAUTH_TOKEN", "Claude token from `claude setup-token`", { secret: true });
+// Hidden prompts make doubled or partial pastes invisible, so check the shape and ask GitHub before saving.
+for (;;) {
+  const tok = await need("GITHUB_DISPATCH_TOKEN", "Fine-grained GitHub token (Actions + Contents read/write on wdash and project repos)", {
+    secret: true,
+    check: (v) => /^(github_pat_|ghp_)[A-Za-z0-9_]{30,}$/.test(v),
+    hint: "the token starts with github_pat_ and has no spaces — paste it once (input is hidden)",
+  });
+  const res = await fetch("https://api.github.com/user", { headers: { Authorization: `Bearer ${tok}` } }).catch(() => null);
+  if (res?.ok) break;
+  console.log(`  ✗ GitHub rejected that token (${res ? res.status : "network error"}). Paste it again.`);
+  delete state.GITHUB_DISPATCH_TOKEN;
+}
+await need("CLAUDE_CODE_OAUTH_TOKEN", "Claude token from `claude setup-token`", {
+  secret: true,
+  check: (v) => /^sk-ant-oat\d+-[A-Za-z0-9_-]{20,}$/.test(v),
+  hint: "the token starts with sk-ant-oat and has no spaces — paste it once (input is hidden)",
+});
 
 const owner = login;
 const wdashRepo = await need("WDASH_REPO", "wdash repo (owner/name)", { def: `${owner}/wdash` });
