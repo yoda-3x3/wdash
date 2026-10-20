@@ -6,8 +6,9 @@ let client: Redis | undefined;
 export function redis(): Redis {
   if (!client) {
     client = new Redis({
-      url: process.env.UPSTASH_REDIS_REST_URL ?? "",
-      token: process.env.UPSTASH_REDIS_REST_TOKEN ?? "",
+      // KV_* names are what Vercel's Upstash integration sets.
+      url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || "",
+      token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || "",
       automaticDeserialization: false,
     });
   }

@@ -86,9 +86,18 @@ state.WEB_URL = webUrl;
 console.log(`\nGitHub OAuth app callback URL must be: ${webUrl}/api/auth/callback/github`);
 await need("GITHUB_ID", "GitHub OAuth app Client ID");
 await need("GITHUB_SECRET", "GitHub OAuth app Client secret", { secret: true });
-await need("UPSTASH_REDIS_REST_URL", "Upstash REST URL", { check: (v) => v.startsWith("https://"), hint: "starts with https://" });
-await need("UPSTASH_REDIS_REST_TOKEN", "Upstash REST token", { secret: true });
-await need("WDASH_REDIS_URL", "Upstash TCP URL (rediss://default:...@...:6379)", { secret: true, check: (v) => /^rediss?:\/\//.test(v), hint: "starts with rediss://" });
+const viaVercel = /^y/i.test(await ask("Did you create Redis through Vercel's Upstash integration? (y/n)", { def: state.REDIS_VIA_VERCEL ?? "y" }));
+state.REDIS_VIA_VERCEL = viaVercel ? "y" : "n";
+if (viaVercel) {
+  // Vercel already injects KV_REST_API_URL / KV_REST_API_TOKEN into the site.
+  delete state.UPSTASH_REDIS_REST_URL;
+  delete state.UPSTASH_REDIS_REST_TOKEN;
+  console.log("  The daemon still needs the TCP URL: Vercel → Storage → your database → .env.local tab → REDIS_URL (or KV_URL).");
+} else {
+  await need("UPSTASH_REDIS_REST_URL", "Upstash REST URL", { check: (v) => v.startsWith("https://"), hint: "starts with https://" });
+  await need("UPSTASH_REDIS_REST_TOKEN", "Upstash REST token", { secret: true });
+}
+await need("WDASH_REDIS_URL", "Redis TCP URL (rediss://default:...@...:6379)", { secret: true, check: (v) => /^rediss?:\/\//.test(v), hint: "starts with rediss://" });
 await need("GITHUB_DISPATCH_TOKEN", "Fine-grained GitHub token (Actions + Contents read/write on wdash and project repos)", { secret: true });
 await need("CLAUDE_CODE_OAUTH_TOKEN", "Claude token from `claude setup-token`", { secret: true });
 
@@ -125,8 +134,7 @@ const webEnv = {
   ALLOWED_GITHUB_LOGIN: login,
   NEXTAUTH_SECRET: state.NEXTAUTH_SECRET,
   NEXTAUTH_URL: webUrl,
-  UPSTASH_REDIS_REST_URL: state.UPSTASH_REDIS_REST_URL,
-  UPSTASH_REDIS_REST_TOKEN: state.UPSTASH_REDIS_REST_TOKEN,
+  ...(state.UPSTASH_REDIS_REST_URL ? { UPSTASH_REDIS_REST_URL: state.UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN: state.UPSTASH_REDIS_REST_TOKEN } : {}),
   GITHUB_DISPATCH_TOKEN: state.GITHUB_DISPATCH_TOKEN,
   WDASH_ARCHIVE_REPO: wdashRepo,
   NEXT_PUBLIC_VAPID_PUBLIC_KEY: state.VAPID_PUBLIC_KEY,
