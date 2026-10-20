@@ -188,14 +188,16 @@ export class JobRunner implements AgentHost, TeamApi {
     if (this.job.kind !== "chat" || this.finishing) return;
     this.finishing = true;
     await this.agents.get(CHAT_AGENT)?.stop("done");
-    const sha = await G.checkpointCommit(this.mainWt, "wdash: chat changes");
+    await G.checkpointCommit(this.mainWt, "wdash: chat changes");
     const base = await G.baseRef(this.repoDir, this.project.baseBranch, this.mode);
     const d = await G.diffAgainst(this.mainWt, base);
     if (d.files.length) {
       await this.relay.emit({ jobId: this.jobId, agentId: CHAT_AGENT, type: "diff", payload: { branch: branchFor.main(this.jobId), files: d.files, stat: d.stat, patch: d.patch, combined: true } });
     }
     await G.pushBranches(this.repoDir, [branchFor.main(this.jobId)]).catch(() => undefined);
-    const summary = d.files.length ? `Chat finished. Changed ${d.files.length} file(s).${sha ? "" : " (No new edits since the last checkpoint.)"}` : "Chat finished. No file changes.";
+    const summary = d.files.length
+      ? `Chat finished. Changed ${d.files.length} file${d.files.length === 1 ? "" : "s"}: ${d.files.map((f) => f.path).slice(0, 10).join(", ")}.`
+      : "Chat finished. No file changes.";
     await this.complete(summary);
   }
 
