@@ -119,6 +119,8 @@ writeFileSync(
   join(root, "daemon", ".env"),
   [
     `WDASH_REDIS_URL=${state.WDASH_REDIS_URL}`,
+    // Lets the home daemon's agents run on your subscription without a separate `claude /login`.
+    `CLAUDE_CODE_OAUTH_TOKEN=${state.CLAUDE_CODE_OAUTH_TOKEN}`,
     `WDASH_WEB_URL=${webUrl}`,
     `VAPID_PUBLIC_KEY=${state.VAPID_PUBLIC_KEY}`,
     `VAPID_PRIVATE_KEY=${state.VAPID_PRIVATE_KEY}`,

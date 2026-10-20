@@ -53,7 +53,7 @@ cp daemon/config/projects.example.json daemon/config/projects.json
 ```
 Fill in `daemon/.env` and list your projects in `daemon/config/projects.json`. **Only listed projects can be touched.** `commands.build` / `test` / `screenshot` are the checks the orchestrator must pass before approving work. They're also the only shell commands agents can run without asking you.
 
-Make sure Claude Code is logged in on the PC (the daemon uses your subscription): run `claude` once and `/login`.
+The daemon runs agents on your subscription via the `claude setup-token` token that the setup script writes to `daemon/.env` (no separate `/login` needed).
 
 Check everything, then install it as a startup task:
 ```bash
