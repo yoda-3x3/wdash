@@ -52,7 +52,7 @@ npm run build -w daemon
 cp daemon/.env.example daemon/.env
 cp daemon/config/projects.example.json daemon/config/projects.json
 ```
-Fill in `daemon/.env` and list your projects in `daemon/config/projects.json`. **Only listed projects can be touched.** `commands.build` / `test` / `screenshot` are the checks the orchestrator must pass before approving work. They're also the only shell commands agents can run without asking you.
+Fill in `daemon/.env` and list your projects in `daemon/config/projects.json`. **Only listed projects can be touched.** `commands.build` / `test` / `screenshot` are the checks the orchestrator must pass before approving work. They're also the only shell commands agents can run without asking you. When a job's work merges into your checkout, the daemon also pushes the base branch to GitHub with your normal git credentials; set `"pushOnMerge": false` on a project to keep it local.
 
 The daemon runs agents on your subscription via the `claude setup-token` token that the setup script writes to `daemon/.env` (no separate `/login` needed).
 

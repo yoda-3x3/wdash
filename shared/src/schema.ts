@@ -20,6 +20,8 @@ export const ProjectConfig = z.object({
   defaultBudgetUsd: z.number().positive().default(5),
   /** Whether a GitHub Actions caller workflow is installed in the repo. */
   cloud: z.boolean().default(true),
+  /** After finished work merges into the PC checkout, push the base branch to GitHub. */
+  pushOnMerge: z.boolean().default(true),
 });
 export type ProjectConfig = z.infer<typeof ProjectConfig>;
 

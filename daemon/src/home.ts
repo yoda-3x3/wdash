@@ -1,6 +1,6 @@
 import { K, TERMINAL_STATUSES, type ProjectConfig } from "@wdash/shared";
 import { loadLocalProjects } from "./config.js";
-import { syncIntoCheckout } from "./git.js";
+import { pushBase, syncIntoCheckout } from "./git.js";
 import { JobRunner } from "./job.js";
 import { clear, raise } from "./notify.js";
 import { processProjectRequests } from "./projects.js";
@@ -130,6 +130,14 @@ export async function syncFinishedJobs(relay: Relay, projects: ProjectConfig[]):
     if (out.kind === "merged") {
       await relay.updateJob(id, { mergeState: "merged" });
       await relay.emit({ jobId: id, type: "info", payload: { text: `Merged into ${project.baseBranch} on your PC (${out.sha.slice(0, 8)}).` } });
+      if (project.pushOnMerge) {
+        const err = await pushBase(project.localPath, project.baseBranch);
+        await relay.emit({
+          jobId: id,
+          type: "info",
+          payload: { text: err ? `Couldn't push ${project.baseBranch} to GitHub: ${err}` : `Pushed ${project.baseBranch} to GitHub (${project.repo}).` },
+        });
+      }
       await clear(relay, id, "needs_merge");
     } else {
       await relay.updateJob(id, { mergeState: "needs_merge" });

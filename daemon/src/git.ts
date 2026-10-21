@@ -99,6 +99,19 @@ export async function pushBranches(repo: string, branches: string[]): Promise<vo
   await git(repo, "push", "origin", ...branches.map((b) => `refs/heads/${b}:refs/heads/${b}`));
 }
 
+/** Push the PC checkout's base branch to GitHub after a merge. Returns an error message instead of throwing. */
+export async function pushBase(localPath: string, baseBranch: string): Promise<string | undefined> {
+  try {
+    await git(localPath, "push", "origin", `refs/heads/${baseBranch}:refs/heads/${baseBranch}`);
+    return undefined;
+  } catch (e) {
+    const msg = (e as GitError).stderr || (e as Error).message;
+    return /rejected|non-fast-forward|fetch first/i.test(msg)
+      ? `GitHub's ${baseBranch} has commits your PC doesn't; pull them, then push.`
+      : msg.trim().split("\n").slice(-2).join(" ").slice(0, 300);
+  }
+}
+
 export async function head(worktree: string): Promise<string> {
   return git(worktree, "rev-parse", "HEAD");
 }

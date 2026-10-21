@@ -822,6 +822,11 @@ export class JobRunner implements AgentHost, TeamApi {
       if (out.kind === "merged") {
         mergeState = "merged";
         detail = `${summary}\n\nMerged into ${this.project.baseBranch} on your PC.`;
+        if (this.project.pushOnMerge) {
+          const err = await G.pushBase(this.project.localPath, this.project.baseBranch);
+          detail += err ? ` Couldn't push it to GitHub: ${err}` : " Pushed to GitHub.";
+          await this.info(err ? `Couldn't push ${this.project.baseBranch} to GitHub: ${err}` : `Pushed ${this.project.baseBranch} to GitHub (${this.project.repo}).`);
+        }
       } else if (out.kind === "needs_merge") {
         mergeState = "needs_merge";
         await this.notify("needs_merge", { detail: `${out.why}${out.conflicts?.length ? ` Conflicts: ${out.conflicts.join(", ")}` : ""}` });

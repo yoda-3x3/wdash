@@ -42,6 +42,25 @@ test("worker worktree -> checkpoint -> merge into job branch -> sync into checko
   const out = await G.syncIntoCheckout(home, "main", job);
   assert.equal(out.kind, "merged");
   assert.equal(readFileSync(join(home, "b.txt"), "utf8"), "worker\n");
+
+  // The merged base branch goes to GitHub too.
+  assert.equal(await G.pushBase(home, "main"), undefined);
+  assert.equal(await G.git(home, "rev-parse", "origin/main"), await G.git(home, "rev-parse", "main"));
+});
+
+test("pushing the base branch reports a remote that moved ahead instead of throwing", async () => {
+  const { root, origin, home } = await setup();
+  const other = join(root, "other");
+  await G.git(root, "clone", origin, other);
+  for (const [k, v] of [["user.name", "t"], ["user.email", "t@t"]]) await G.git(other, "config", k, v);
+  writeFileSync(join(other, "c.txt"), "elsewhere\n");
+  await G.git(other, "add", "-A");
+  await G.git(other, "commit", "-m", "remote change");
+  await G.git(other, "push", "origin", "main");
+  writeFileSync(join(home, "d.txt"), "local\n");
+  await G.git(home, "add", "-A");
+  await G.git(home, "commit", "-m", "local change");
+  assert.match((await G.pushBase(home, "main")) ?? "", /has commits your PC doesn't/);
 });
 
 test("sync refuses a dirty checkout and conflicting merges, leaving the branch", async () => {
