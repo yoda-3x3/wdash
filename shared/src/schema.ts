@@ -87,6 +87,9 @@ export const JobRecord = z.object({
   budgetUsd: num,
   reviewCap: num.default(3),
   costUsd: num.default(0),
+  /** Tokens across all agents: input incl. cache reads/writes, and output. */
+  tokensIn: num.default(0),
+  tokensOut: num.default(0),
   createdAt: num,
   updatedAt: num,
   summary: z.string().optional(),

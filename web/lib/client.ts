@@ -66,6 +66,17 @@ export function timeAgo(ts: number | undefined, now = Date.now()): string {
   return `${Math.round(h / 24)}d ago`;
 }
 
+/** 950, 12.3k, 4.1M */
+export function tokens(n: number | undefined): string {
+  const v = n ?? 0;
+  return v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(Math.round(v));
+}
+
+/** Tooltip text for a job's token counts. */
+export function tokenTitle(job: { tokensIn?: number; tokensOut?: number }): string {
+  return `${(job.tokensIn ?? 0).toLocaleString()} input tokens (incl. cache) · ${(job.tokensOut ?? 0).toLocaleString()} output tokens`;
+}
+
 export function usd(n: number | undefined): string {
   return `$${(n ?? 0).toFixed(2)}`;
 }

@@ -850,7 +850,14 @@ export class JobRunner implements AgentHost, TeamApi {
     );
     const total = [...this.agents.values()].reduce((s, a) => s + (a.rec.costUsd || 0), 0);
     this.job.costUsd = total;
-    await this.relay.updateJob(this.jobId, { costUsd: total.toFixed(4) });
+    let tokensIn = 0;
+    let tokensOut = 0;
+    for (const v of Object.values(await this.relay.r.hgetall(K.usage(this.jobId)))) {
+      const x = JSON.parse(v) as Record<string, number>;
+      tokensIn += (x.inputTokens ?? 0) + (x.cacheReadTokens ?? 0) + (x.cacheWriteTokens ?? 0);
+      tokensOut += x.outputTokens ?? 0;
+    }
+    await this.relay.updateJob(this.jobId, { costUsd: total.toFixed(4), tokensIn, tokensOut });
     await this.relay.emit({ jobId: this.jobId, agentId: agent.id, type: "usage", payload: { agent: agent.id, costUsd: r.total_cost_usd, jobCostUsd: total } });
   }
 

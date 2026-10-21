@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { TERMINAL_STATUSES, type JobRecord } from "@wdash/shared";
-import { api, timeAgo, usd } from "@/lib/client";
+import { api, timeAgo, tokenTitle, tokens, usd } from "@/lib/client";
 import { ApproveAll, AttentionCard, Bar, LocationBadge, StatusChip } from "./bits";
 import { useBoard } from "./Shell";
 
@@ -97,6 +97,7 @@ function JobCard({ job, waiting, now }: { job: JobRecord; waiting: number; now: 
         </div>
         <span>
           {usd(job.costUsd)} / {usd(job.budgetUsd)}
+          {job.tokensIn + job.tokensOut > 0 && (<span className="ml-1.5" title={tokenTitle(job)}>· {tokens(job.tokensIn + job.tokensOut)} tokens</span>)}
         </span>
         {waiting > 0 && <span className="chip bg-warn/15 text-warn">{waiting} waiting</span>}
         {job.mergeState === "needs_merge" && <span className="chip bg-bad/15 text-bad">needs merge</span>}

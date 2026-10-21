@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentRecord, Approval, Attachment, Attention, JobRecord, WdEvent } from "@wdash/shared";
 import { CHAT_AGENT, TERMINAL_STATUSES } from "@wdash/shared";
-import { api, timeAgo, usd, usePoll } from "@/lib/client";
+import { api, timeAgo, tokenTitle, tokens, usd, usePoll } from "@/lib/client";
 import { ApproveAll, AttentionCard, Bar, LocationBadge, StatusChip } from "./bits";
 import { AttachButton, FileChips, dropProps, fmtSize, useUploads } from "./Attachments";
 
@@ -175,6 +175,7 @@ function Header({ job, lease, onChange }: { job: JobRecord; lease: string | null
           <Bar value={job.costUsd} max={job.budgetUsd} />
           <span className="shrink-0">
             {usd(job.costUsd)}/{usd(job.budgetUsd)}
+            {job.tokensIn + job.tokensOut > 0 && (<span className="ml-1.5" title={tokenTitle(job)}>· {tokens(job.tokensIn + job.tokensOut)} tokens</span>)}
           </span>
         </div>
         {job.cloudRunUrl && (
@@ -728,13 +729,19 @@ function Usage({ job, agents, usage }: { job: JobRecord; agents: AgentRecord[]; 
           </span>
         </div>
         <Bar value={job.costUsd} max={job.budgetUsd} />
-        <p className="text-xs text-muted">API-equivalent cost estimated by the Agent SDK. It runs on your subscription; this is how wdash measures how much of it a job uses.</p>
+        <div className="flex items-center justify-between text-sm">
+          <span>Tokens</span>
+          <span title={tokenTitle(job)}>
+            {tokens(job.tokensIn + job.tokensOut)} <span className="text-xs text-muted">({tokens(job.tokensIn)} in · {tokens(job.tokensOut)} out)</span>
+          </span>
+        </div>
+        <p className="text-xs text-muted">Input includes cached context, which is most of it and much cheaper than new tokens. API-equivalent cost estimated by the Agent SDK. It runs on your subscription; this is how wdash measures how much of it a job uses.</p>
       </div>
       <div className="card overflow-x-auto">
         <table className="w-full text-left text-xs">
           <thead className="text-muted">
             <tr>
-              {["agent", "model", "cost", "in", "out", "cache read", "turns"].map((h) => (
+              {["agent", "model", "cost", "in", "out", "cache read", "cache write", "turns"].map((h) => (
                 <th key={h} className="px-3 py-2 font-medium">
                   {h}
                 </th>
@@ -752,6 +759,7 @@ function Usage({ job, agents, usage }: { job: JobRecord; agents: AgentRecord[]; 
                   <td className="px-3 py-1.5">{fmt(u.inputTokens)}</td>
                   <td className="px-3 py-1.5">{fmt(u.outputTokens)}</td>
                   <td className="px-3 py-1.5">{fmt(u.cacheReadTokens)}</td>
+                  <td className="px-3 py-1.5">{fmt(u.cacheWriteTokens)}</td>
                   <td className="px-3 py-1.5">{String(u.turns ?? "—")}</td>
                 </tr>
               );
