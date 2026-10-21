@@ -55,7 +55,7 @@ export function Gestures() {
       >
         📷<span className="hidden sm:inline">{on ? (status === "loading" ? "Loading…" : "Gestures on") : "Gestures"}</span>
       </button>
-      {on && <Camera onStatus={setStatus} onError={(m) => (setErr(m), setStatus("error"))} />}
+      {on && <Camera onStatus={setStatus} onError={(m) => (setErr(m), setStatus("error"))} onClose={toggle} />}
       {on && err && (
         <div className="fixed right-4 top-[calc(3.75rem+env(safe-area-inset-top))] z-30 max-w-xs rounded-lg border border-bad/50 bg-panel p-3 text-xs text-bad shadow-lg">
           Gestures: {err}
@@ -68,7 +68,7 @@ export function Gestures() {
   );
 }
 
-function Camera({ onStatus, onError }: { onStatus: (s: "loading" | "ready") => void; onError: (m: string) => void }) {
+function Camera({ onStatus, onError, onClose }: { onStatus: (s: "loading" | "ready") => void; onError: (m: string) => void; onClose: () => void }) {
   const video = useRef<HTMLVideoElement>(null);
   const router = useRouter();
   const path = usePathname();
@@ -78,6 +78,13 @@ function Camera({ onStatus, onError }: { onStatus: (s: "loading" | "ready") => v
   const [toast, setToast] = useState<string>();
   const [legend, setLegend] = useState(false);
   const [listening, setListening] = useState(false);
+  // Paused: the camera keeps watching, but only 🤙 (to resume) does anything.
+  const [paused, setPaused] = useState(false);
+  const pausedRef = useRef(false);
+  const setPause = useCallback((p: boolean) => {
+    pausedRef.current = p;
+    setPaused(p);
+  }, []);
   const speech = useRef<SpeechRec | undefined>(undefined);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -98,6 +105,12 @@ function Camera({ onStatus, onError }: { onStatus: (s: "loading" | "ready") => v
     async (a: GestureAction) => {
       const { path, refresh, router } = ctx.current;
       const jobId = path.startsWith("/jobs/") ? path.split("/")[2] : undefined;
+      if (a === "toggle_pause") {
+        setPause(!pausedRef.current);
+        say(pausedRef.current ? "🤙 Paused. 🤙 again to resume" : "🤙 Gestures resumed");
+        return;
+      }
+      if (pausedRef.current) return;
       switch (a) {
         case "scroll_up":
         case "scroll_down":
@@ -191,7 +204,7 @@ function Camera({ onStatus, onError }: { onStatus: (s: "loading" | "ready") => v
         say("🎤 Listening… make a fist to send");
       }
     },
-    [say],
+    [say, setPause],
   );
 
   useEffect(() => {
@@ -241,7 +254,7 @@ function Camera({ onStatus, onError }: { onStatus: (s: "loading" | "ready") => v
           const c = classify(r.gestures, r.landmarks, { countFingers: ctx.current.path === "/wall" });
           for (const a of tracker.update(c.pose, c.wrist, now)) void run(a);
           setPose(tracker.current);
-          setProgress(tracker.progress(now));
+          setProgress(pausedRef.current && tracker.current !== "shaka" ? 0 : tracker.progress(now));
         }
         timer = setTimeout(loop, FRAME_MS);
       };
@@ -260,7 +273,13 @@ function Camera({ onStatus, onError }: { onStatus: (s: "loading" | "ready") => v
   return (
     <div className="fixed right-4 top-[calc(3.75rem+env(safe-area-inset-top))] z-30 flex flex-row-reverse items-start gap-2">
       <div className="relative">
-        <video ref={video} muted playsInline className="h-24 w-32 -scale-x-100 rounded-lg border border-line bg-black object-cover shadow-lg" />
+        <video
+          ref={video}
+          muted
+          playsInline
+          className={`h-24 w-32 -scale-x-100 rounded-lg border bg-black object-cover shadow-lg ${paused ? "border-warn opacity-50" : "border-line"}`}
+        />
+        {paused && <div className="absolute inset-0 flex items-center justify-center text-2xl" aria-label="Gestures paused">⏸</div>}
         <div className="absolute bottom-1 left-1 flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-sm text-white">
           <span>{POSE_EMOJI[pose]}</span>
           {progress > 0 && (
@@ -270,14 +289,26 @@ function Camera({ onStatus, onError }: { onStatus: (s: "loading" | "ready") => v
           )}
           {listening && <span className="animate-pulse">🎤</span>}
         </div>
-        <button
-          type="button"
-          className="absolute right-1 top-1 rounded bg-black/60 px-1.5 text-xs text-white"
-          onClick={() => setLegend((v) => !v)}
-          aria-label="Gesture help"
-        >
-          ?
-        </button>
+        <div className="absolute right-1 top-1 flex gap-1">
+          <button
+            type="button"
+            className="rounded bg-black/60 px-1.5 text-xs text-white"
+            onClick={() => {
+              setPause(!paused);
+              say(paused ? "Gestures resumed" : "Paused. 🤙 or ▶ to resume");
+            }}
+            aria-label={paused ? "Resume gestures" : "Pause gestures"}
+            title={paused ? "Resume" : "Pause (or hold 🤙)"}
+          >
+            {paused ? "▶" : "⏸"}
+          </button>
+          <button type="button" className="rounded bg-black/60 px-1.5 text-xs text-white" onClick={() => setLegend((v) => !v)} aria-label="Gesture help">
+            ?
+          </button>
+          <button type="button" className="rounded bg-black/60 px-1.5 text-xs text-white" onClick={onClose} aria-label="Turn off gestures" title="Turn off the camera">
+            ✕
+          </button>
+        </div>
       </div>
       {legend && (
         <div className="card max-w-xs space-y-1 p-3 text-xs shadow-lg">
