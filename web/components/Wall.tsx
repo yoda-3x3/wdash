@@ -174,9 +174,10 @@ export function Wall() {
         </div>
       ) : (
         <div className="grid gap-1.5 sm:gap-2" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${dims.min}px), 1fr))` }}>
-          {tiles.map((t) => (
+          {tiles.map((t, i) => (
             <Tile
               key={t.key}
+              n={i < 5 ? i + 1 : undefined}
               job={t.job}
               agent={t.agent}
               lines={lines[t.key] ?? []}
@@ -192,6 +193,7 @@ export function Wall() {
 }
 
 function Tile({
+  n,
   job,
   agent,
   lines,
@@ -199,6 +201,8 @@ function Tile({
   height,
   onActed,
 }: {
+  /** 1-5: shown as a badge; holding up that many fingers (camera gestures) opens the tile. */
+  n?: number;
   job: JobRecord;
   agent: AgentRecord;
   lines: Line[];
@@ -222,8 +226,16 @@ function Tile({
         needsYou ? "border-[#fbbf24] shadow-[0_0_0_1px_#fbbf24,0_0_14px_-2px_#fbbf2466]" : agent.status === "failed" ? "border-[#f87171]/70" : "border-[#1f242c]"
       } ${dim ? "opacity-60" : ""} bg-[#0b0d10]`}
       style={{ height }}
+      data-wall-tile={n}
+      data-href={`/jobs/${job.id}`}
+      data-label={`${agent.id} · ${job.title.slice(0, 40)}`}
     >
       <Link href={`/jobs/${job.id}`} className="flex items-center gap-1.5 border-b border-[#1f242c] bg-[#0f1216] px-2 py-1 hover:bg-[#151a20]">
+        {n && (
+          <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-[#2a2f39] text-[10px] font-semibold text-[#d6dae0]" title={`Hold up ${n} finger${n === 1 ? "" : "s"} to open`}>
+            {n}
+          </span>
+        )}
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[agent.status] ?? "bg-[#7d8590]"}`} />
         <span className={agent.role === "orchestrator" ? "text-[#c4b5fd]" : "text-[#67e8f9]"}>{agent.id}</span>
         <span className="truncate text-[#7d8590]">

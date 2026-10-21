@@ -128,6 +128,20 @@ function Camera({ onStatus, onError }: { onStatus: (s: "loading" | "ready") => v
           }
           return;
         }
+        case "open_1":
+        case "open_2":
+        case "open_3":
+        case "open_4":
+        case "open_5": {
+          const n = a.slice(5);
+          const tile = document.querySelector<HTMLElement>(`[data-wall-tile="${n}"]`);
+          const href = tile?.dataset.href;
+          if (!tile || !href) return say(`No tile ${n} on the Wall`);
+          tile.animate([{ outline: "3px solid #a5b4fc", transform: "scale(1)" }, { outline: "3px solid #a5b4fc", transform: "scale(1.03)" }, { outline: "3px solid transparent", transform: "scale(1)" }], { duration: 350 });
+          say(`${n}️⃣ ${tile.dataset.label ?? "Opening"}`);
+          setTimeout(() => router.push(href), 250);
+          return;
+        }
         case "dictate":
           return startDictation();
         case "send":
@@ -224,7 +238,7 @@ function Camera({ onStatus, onError }: { onStatus: (s: "loading" | "ready") => v
         if (v.readyState >= 2 && v.currentTime !== last) {
           last = v.currentTime;
           const r = recognizer!.recognizeForVideo(v, now);
-          const c = classify(r.gestures, r.landmarks);
+          const c = classify(r.gestures, r.landmarks, { countFingers: ctx.current.path === "/wall" });
           for (const a of tracker.update(c.pose, c.wrist, now)) void run(a);
           setPose(tracker.current);
           setProgress(tracker.progress(now));

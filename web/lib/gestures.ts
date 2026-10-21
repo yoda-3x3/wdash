@@ -1,9 +1,38 @@
 // Turns MediaPipe gesture-recognizer output into dashboard gestures. Pure, so it can run per video frame.
 
-export type Pose = "thumb_up" | "thumb_down" | "open_palm" | "fist" | "love" | "point_up" | "point_down" | "point_left" | "point_right" | "none";
+export type Pose =
+  | "thumb_up"
+  | "thumb_down"
+  | "open_palm"
+  | "fist"
+  | "love"
+  | "point_up"
+  | "point_down"
+  | "point_left"
+  | "point_right"
+  | "count_1"
+  | "count_2"
+  | "count_3"
+  | "count_4"
+  | "count_5"
+  | "none";
 
 /** One-shot actions fired by the tracker; "scroll_*" fire every frame while held. */
-export type GestureAction = "approve" | "deny" | "board" | "prev_page" | "next_page" | "dictate" | "send" | "scroll_up" | "scroll_down";
+export type GestureAction =
+  | "approve"
+  | "deny"
+  | "board"
+  | "prev_page"
+  | "next_page"
+  | "dictate"
+  | "send"
+  | "scroll_up"
+  | "scroll_down"
+  | "open_1"
+  | "open_2"
+  | "open_3"
+  | "open_4"
+  | "open_5";
 
 type Pt = { x: number; y: number };
 type Category = { categoryName: string; score: number };
@@ -39,10 +68,30 @@ function pointing(lm: Pt[]): Pose | undefined {
   return undefined;
 }
 
-export function classify(gestures: Category[][], landmarks: Pt[][]): { pose: Pose; wrist?: Pt } {
+/**
+ * Fingers held up, 0-5: index, middle, ring and pinky when extended, plus the thumb when it sticks out
+ * alongside them. Only counts an upright hand (fingers above the wrist), so sideways pointing isn't a count.
+ */
+export function fingerCount(lm: Pt[]): number {
+  if (lm.length < 21) return 0;
+  const wrist = lm[0]!;
+  const palm = dist(wrist, lm[9]!);
+  if (lm[9]!.y > wrist.y - 0.3 * palm) return 0; // not upright
+  const up = (tip: number, pip: number) => dist(lm[tip]!, wrist) > dist(lm[pip]!, wrist) * 1.15 && lm[tip]!.y < lm[pip]!.y;
+  const fingers = [up(8, 6), up(12, 10), up(16, 14), up(20, 18)].filter(Boolean).length;
+  const thumbOut = dist(lm[4]!, lm[5]!) > 0.55 * palm && dist(lm[4]!, lm[17]!) > dist(lm[3]!, lm[17]!) * 1.05;
+  return fingers + (fingers > 0 && thumbOut ? 1 : 0);
+}
+
+/** `countFingers`: read an upright hand as a number (the Wall uses it to open tiles). */
+export function classify(gestures: Category[][], landmarks: Pt[][], opts: { countFingers?: boolean } = {}): { pose: Pose; wrist?: Pt } {
   const lm = landmarks[0];
   if (!lm) return { pose: "none" };
   const wrist = lm[0];
+  if (opts.countFingers) {
+    const n = fingerCount(lm);
+    if (n >= 1 && n <= 5) return { pose: `count_${n}` as Pose, wrist };
+  }
   const point = pointing(lm);
   if (point) return { pose: point, wrist };
   const top = gestures[0]?.[0];
@@ -59,6 +108,11 @@ const HOLD_MS: Partial<Record<Pose, number>> = {
   love: 700,
   point_left: 500,
   point_right: 500,
+  count_1: 800,
+  count_2: 800,
+  count_3: 800,
+  count_4: 800,
+  count_5: 800,
 };
 const POSE_ACTION: Partial<Record<Pose, GestureAction>> = {
   thumb_up: "approve",
@@ -68,6 +122,11 @@ const POSE_ACTION: Partial<Record<Pose, GestureAction>> = {
   love: "dictate",
   point_right: "next_page",
   point_left: "prev_page",
+  count_1: "open_1",
+  count_2: "open_2",
+  count_3: "open_3",
+  count_4: "open_4",
+  count_5: "open_5",
 };
 const STILL = 0.04;
 
@@ -125,6 +184,11 @@ export const POSE_EMOJI: Record<Pose, string> = {
   point_down: "👇",
   point_left: "👈",
   point_right: "👉",
+  count_1: "1️⃣",
+  count_2: "2️⃣",
+  count_3: "3️⃣",
+  count_4: "4️⃣",
+  count_5: "5️⃣",
   none: "·",
 };
 
@@ -137,4 +201,5 @@ export const LEGEND: Array<[string, string]> = [
   ["☝️ / 👇", "Scroll up / down"],
   ["🤟 hold", "Dictate into the chat box"],
   ["✊ hold", "Send the message (stops dictation)"],
+  ["1–5 fingers up", "On the Wall: open tile 1–5"],
 ];
