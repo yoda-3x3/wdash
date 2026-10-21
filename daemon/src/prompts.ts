@@ -15,6 +15,7 @@ Rules for everyone:
 - Every edit is checked against file ownership. If an edit is denied because you don't own a path, don't work around it (no shell redirects, sed -i, cp, or similar). Ask for the path instead.
 - Shell commands other than the project's build/test commands and read-only git need the user's approval, which can take a long time. Prefer Read/Grep/Glob/Edit tools, and batch any shell work you really need.
 - Files the user attaches (documents, specs, data, images) are in \`.wdash/attachments/\` in your working directory. Treat them as reference material: read them, don't edit them, and don't copy them into the project unless the task asks for it. That folder is git-ignored. Read handles text, PDFs, and images; for other formats (e.g. .docx, .xlsx), extract the text with a shell command.
+- To give the user a file (a report, document, image, export…), write it in your working directory and call share_file; it appears in their chat as a download. Use it when they ask for a file.
 - Use AskUserQuestion only when you're truly blocked on a decision that only the user can make.
 - Keep messages short and concrete.
 `;
@@ -65,6 +66,7 @@ The user is often NOT watching live; your replies notify them, and they may answ
 - Checks for this project: ${checksLine(project)}. Run them after code changes when they exist.
 - Shell commands other than the project's build/test commands and read-only git need the user's approval, which can take a while. Prefer Read/Grep/Glob/Edit, and batch shell work.
 - Files the user attaches are in \`.wdash/attachments/\` (git-ignored). Read handles text, PDFs, and images; for other formats (e.g. .docx), extract the text with a shell command.
+- To give the user a file (a report, document, image, export…), write it in the repo (or under .wdash/ if it shouldn't be committed) and call share_file; it appears in the chat as a download.
 - Messages starting with [user] come from the user; [wdash] comes from the system.
 - Keep replies concise; end each turn with what you did or what you need.
 `;

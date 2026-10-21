@@ -1,10 +1,14 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 import type { SDKResultMessage, McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk";
 import type { Redis } from "ioredis";
 import {
   ATTACHMENTS_DIR,
   CHAT_AGENT,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS,
+  safeFileName,
+  uniqueFileName,
   K,
   MODEL_PRESETS,
   TERMINAL_STATUSES,
@@ -24,7 +28,7 @@ import { runChecks, type CheckResult } from "./checks.js";
 import { env } from "./config.js";
 import * as G from "./git.js";
 import { clear, clearJob, raise } from "./notify.js";
-import { conflictingClaims, globsOverlap, type PolicyContext } from "./permissions.js";
+import { conflictingClaims, globsOverlap, inside, type PolicyContext } from "./permissions.js";
 import { chatPrompt, orchestratorPrompt, workerPrompt } from "./prompts.js";
 import type { Relay } from "./relay.js";
 
@@ -45,6 +49,8 @@ type WorkerState = {
 
 const ORCH = "orchestrator";
 
+type UsageTotals = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; turns: number };
+
 export class JobRunner implements AgentHost, TeamApi {
   readonly jobId: string;
   private job!: JobRecord;
@@ -60,6 +66,8 @@ export class JobRunner implements AgentHost, TeamApi {
   private stopped = false;
   /** Attachment contents already fetched from the relay, by file id. */
   private fileCache = new Map<string, Buffer>();
+  /** Each agent's usage totals from earlier runs, read once per run. */
+  private usageBase = new Map<string, UsageTotals>();
   private finishing = false;
   private lastCheckpointAt = 0;
   private budgetWarned = false;
@@ -581,7 +589,7 @@ export class JobRunner implements AgentHost, TeamApi {
   }
 
   mcpServer(agent: AgentRunner): McpSdkServerConfigWithInstance {
-    if (agent.rec.role === "chat") return chatServer();
+    if (agent.rec.role === "chat") return chatServer(this, agent.id);
     return agent.rec.role === "orchestrator" ? orchestratorServer(this, agent.id) : workerServer(this, agent.id);
   }
 
@@ -834,21 +842,32 @@ export class JobRunner implements AgentHost, TeamApi {
   // =====================================================================
 
   private async recordUsage(agent: AgentRunner, r: SDKResultMessage): Promise<void> {
+    // The SDK's totals are per run of an agent and restart at zero when it resumes (after a PC restart or a
+    // move to the cloud), so add them to what earlier runs recorded.
+    let base = this.usageBase.get(agent.id);
+    if (!base) {
+      const prev = await this.relay.r.hget(K.usage(this.jobId), agent.id);
+      base = prev ? (JSON.parse(prev) as UsageTotals) : { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, turns: 0 };
+      this.usageBase.set(agent.id, base);
+    }
     const u = r.usage as unknown as Record<string, number>;
     await this.relay.r.hset(
       K.usage(this.jobId),
       agent.id,
       JSON.stringify({
-        costUsd: r.total_cost_usd,
-        inputTokens: u.input_tokens ?? 0,
-        outputTokens: u.output_tokens ?? 0,
-        cacheReadTokens: u.cache_read_input_tokens ?? 0,
-        cacheWriteTokens: u.cache_creation_input_tokens ?? 0,
-        turns: r.num_turns,
+        costUsd: agent.rec.costUsd,
+        inputTokens: base.inputTokens + (u.input_tokens ?? 0),
+        outputTokens: base.outputTokens + (u.output_tokens ?? 0),
+        cacheReadTokens: base.cacheReadTokens + (u.cache_read_input_tokens ?? 0),
+        cacheWriteTokens: base.cacheWriteTokens + (u.cache_creation_input_tokens ?? 0),
+        turns: base.turns + (r.num_turns ?? 0),
         model: agent.rec.model,
       }),
     );
-    const total = [...this.agents.values()].reduce((s, a) => s + (a.rec.costUsd || 0), 0);
+    // Every agent the job ever had, not just the ones running now (merged workers aren't resumed).
+    const live = new Map([...this.agents.values()].map((a) => [a.id, a.rec.costUsd || 0]));
+    for (const rec of await this.relay.getAgents(this.jobId)) if (!live.has(rec.id)) live.set(rec.id, rec.costUsd || 0);
+    const total = [...live.values()].reduce((s, c) => s + c, 0);
     this.job.costUsd = total;
     let tokensIn = 0;
     let tokensOut = 0;
@@ -858,7 +877,7 @@ export class JobRunner implements AgentHost, TeamApi {
       tokensOut += x.outputTokens ?? 0;
     }
     await this.relay.updateJob(this.jobId, { costUsd: total.toFixed(4), tokensIn, tokensOut });
-    await this.relay.emit({ jobId: this.jobId, agentId: agent.id, type: "usage", payload: { agent: agent.id, costUsd: r.total_cost_usd, jobCostUsd: total } });
+    await this.relay.emit({ jobId: this.jobId, agentId: agent.id, type: "usage", payload: { agent: agent.id, costUsd: agent.rec.costUsd, jobCostUsd: total } });
   }
 
   /** Returns true if the job was stopped for budget. */
@@ -956,6 +975,23 @@ export class JobRunner implements AgentHost, TeamApi {
     return files.map((f) => f.name);
   }
 
+  async shareFile(fromId: string, path: string, note?: string): Promise<string> {
+    const a = this.agents.get(fromId);
+    if (!a) throw new Error("unknown agent");
+    const abs = resolve(a.cwd, path);
+    if (!inside(a.cwd, abs)) throw new Error(`${path} is outside your working directory.`);
+    if (!existsSync(abs) || !statSync(abs).isFile()) throw new Error(`${path} isn't a file.`);
+    const size = statSync(abs).size;
+    if (size > MAX_ATTACHMENT_BYTES) throw new Error(`${path} is ${(size / 1024 / 1024).toFixed(1)} MB; the limit is ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
+    const existing = await this.relay.listFiles(this.jobId);
+    if (existing.length >= MAX_ATTACHMENTS) throw new Error(`This job already has ${MAX_ATTACHMENTS} files.`);
+    const name = uniqueFileName(safeFileName(basename(abs)), new Set(existing.map((f) => f.name)));
+    const meta = { id: newId("f"), name, size, type: mimeFor(name), addedAt: Date.now(), from: fromId };
+    await this.relay.putFile(this.jobId, meta, readFileSync(abs));
+    await this.relay.emit({ jobId: this.jobId, agentId: fromId, type: "artifact", payload: { kind: "file", fileId: meta.id, name, size, note } });
+    return `Shared ${name}. The user sees it in the chat as a download.`;
+  }
+
   /** Files added mid-job: copy them into every live agent's worktree. */
   private async deliverAttachments(ids: string[]): Promise<string[]> {
     const only = new Set(ids);
@@ -990,4 +1026,26 @@ function checksSummary(results: CheckResult[]): string {
 
 function resultText(r: SDKResultMessage): string {
   return "result" in r && typeof r.result === "string" ? r.result : "";
+}
+
+const MIME: Record<string, string> = {
+  md: "text/markdown",
+  txt: "text/plain",
+  csv: "text/csv",
+  json: "application/json",
+  html: "text/html",
+  pdf: "application/pdf",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  svg: "image/svg+xml",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  zip: "application/zip",
+};
+
+function mimeFor(name: string): string {
+  return MIME[name.split(".").pop()?.toLowerCase() ?? ""] ?? "application/octet-stream";
 }

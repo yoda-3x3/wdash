@@ -336,7 +336,8 @@ function Timeline({ events, agents }: { events: WdEvent[]; agents: AgentRecord[]
   const rows = useMemo(() => {
     const out: Row[] = [];
     for (const e of events) {
-      if ((QUIET.includes(e.type) && !(e.type === "permission_decision" && e.payload.auto)) || e.type === "tool_result") continue;
+      const shown = (e.type === "permission_decision" && e.payload.auto) || (e.type === "artifact" && e.payload.kind === "file");
+      if ((QUIET.includes(e.type) && !shown) || e.type === "tool_result") continue;
       if (filter !== "all" && e.agentId !== filter && e.agentId) continue;
       if (e.subagentId) {
         const last = out.at(-1);
@@ -441,6 +442,22 @@ function EventRow({ e, result, answer }: { e: WdEvent; result?: WdEvent; answer?
       return (
         <div className="rounded-lg border border-warn/40 px-3 py-1.5 text-xs">
           {head}permission requested: <span className="font-mono">{String(p.title)}</span>
+        </div>
+      );
+    case "artifact":
+      return (
+        <div className="rounded-lg bg-panel px-3 py-2 text-sm">
+          {head}
+          <a
+            href={`/api/jobs/${e.jobId}/files/${String(p.fileId)}`}
+            download={String(p.name)}
+            className="mt-1 flex w-fit max-w-full items-center gap-2 rounded-lg border border-line px-3 py-2 hover:border-accent"
+          >
+            <span aria-hidden>📄</span>
+            <span className="truncate font-medium">{String(p.name)}</span>
+            <span className="shrink-0 text-xs text-muted">{fmtSize(Number(p.size ?? 0))} · download</span>
+          </a>
+          {p.note ? <p className="mt-1 text-xs text-muted">{String(p.note)}</p> : null}
         </div>
       );
     case "permission_decision":
@@ -811,6 +828,7 @@ function JobFiles({ jobId, files }: { jobId: string; files: Attachment[] }) {
       <span className="text-muted">Files:</span>
       {files.map((f) => (
         <a key={f.id} href={`/api/jobs/${jobId}/files/${f.id}`} className="rounded-lg border border-line px-2 py-1 hover:border-accent" download={f.name}>
+          {f.from ? "📄 " : ""}
           {f.name} <span className="text-muted">{fmtSize(f.size)}</span>
         </a>
       ))}

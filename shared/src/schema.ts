@@ -121,6 +121,8 @@ export const Attachment = z.object({
   size: z.number(),
   type: z.string().default("application/octet-stream"),
   addedAt: z.number(),
+  /** Agent id when an agent shared it (share_file); absent for the user's uploads. */
+  from: z.string().optional(),
 });
 export type Attachment = z.infer<typeof Attachment>;
 

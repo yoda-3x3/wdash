@@ -9,6 +9,7 @@ export type PlannedWorker = { name: string; task: string; globs: string[] };
 export interface TeamApi {
   // everyone
   post(fromId: string, to: string, text: string): Promise<string>;
+  shareFile(fromId: string, path: string, note?: string): Promise<string>;
   // orchestrator
   submitPlan(summary: string, workers: PlannedWorker[]): Promise<string>;
   spawnWorker(w: PlannedWorker): Promise<string>;
@@ -36,6 +37,19 @@ async function wrap(fn: () => Promise<string>) {
   }
 }
 
+/** Lets any agent hand the user a file; it shows in the chat as a download. */
+function shareTool(api: TeamApi, selfId: string) {
+  return tool(
+    "share_file",
+    "Put a file from your working directory into the chat so the user can download it (reports, documents, images, data, exports). Up to 4 MB. Use it whenever the user asks for a file or a file is the deliverable.",
+    {
+      path: z.string().min(1).describe("Path relative to your working directory, e.g. docs/report.md"),
+      note: z.string().max(500).optional().describe("One line shown with the file"),
+    },
+    (a) => wrap(() => api.shareFile(selfId, a.path, a.note)),
+  );
+}
+
 const globs = z.array(z.string().min(1)).min(1).describe("Path globs relative to the repo root, posix style, e.g. src/solver/**");
 const workerShape = z.object({
   name: z.string().regex(/^[a-z][a-z0-9-]{0,23}$/).describe("Short id like 'solver' or 'tests'"),
@@ -48,6 +62,7 @@ export function orchestratorServer(api: TeamApi, selfId: string): McpSdkServerCo
     name: "wdash",
     version: "0.1.0",
     tools: [
+      shareTool(api, selfId),
       tool(
         "team_plan",
         "Submit the plan: split the task across 1-4 workers, each owning non-overlapping path globs. Plans with 3+ workers wait for the user's approval; smaller plans start immediately.",
@@ -91,9 +106,9 @@ export function orchestratorServer(api: TeamApi, selfId: string): McpSdkServerCo
   });
 }
 
-/** Chat agents work alone: no board tools. */
-export function chatServer(): McpSdkServerConfigWithInstance {
-  return createSdkMcpServer({ name: "wdash", version: "0.1.0", tools: [] });
+/** Chat agents work alone: no board tools, just sharing files. */
+export function chatServer(api: TeamApi, selfId: string): McpSdkServerConfigWithInstance {
+  return createSdkMcpServer({ name: "wdash", version: "0.1.0", tools: [shareTool(api, selfId)] });
 }
 
 export function workerServer(api: TeamApi, selfId: string): McpSdkServerConfigWithInstance {
@@ -101,6 +116,7 @@ export function workerServer(api: TeamApi, selfId: string): McpSdkServerConfigWi
     name: "wdash",
     version: "0.1.0",
     tools: [
+      shareTool(api, selfId),
       tool(
         "board_post",
         "Send a message to the orchestrator ('orchestrator'), another worker (by name) or 'all'.",

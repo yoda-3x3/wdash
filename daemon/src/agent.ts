@@ -48,11 +48,16 @@ export class AgentRunner {
   private subagentCalls = new Map<string, string>();
   busy = false;
 
+  /** Cost from earlier runs of this agent: the SDK's total_cost_usd starts from zero on every resume. */
+  private readonly baseCostUsd: number;
+
   constructor(
     private readonly host: AgentHost,
     public rec: AgentRecord,
     private readonly opts: AgentOptions,
-  ) {}
+  ) {
+    this.baseCostUsd = rec.costUsd || 0;
+  }
 
   get id(): string {
     return this.rec.id;
@@ -229,7 +234,7 @@ export class AgentRunner {
       }
       case "result": {
         this.busy = false;
-        this.rec.costUsd = msg.total_cost_usd;
+        this.rec.costUsd = this.baseCostUsd + msg.total_cost_usd;
         await this.save();
         // An assistant-level API error may already have failed this agent; don't raise the same stop twice.
         if ((msg.is_error || msg.subtype !== "success") && this.rec.status !== "failed") {

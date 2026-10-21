@@ -190,6 +190,15 @@ export class Relay {
       .map((p) => p.data);
   }
 
+  async putFile(jobId: string, meta: Attachment, data: Buffer): Promise<void> {
+    const p = this.r.pipeline();
+    p.hset(K.fileData(jobId), meta.id, data.toString("base64"));
+    p.hset(K.files(jobId), meta.id, JSON.stringify(meta));
+    p.expire(K.fileData(jobId), TTL_SECONDS);
+    p.expire(K.files(jobId), TTL_SECONDS);
+    await p.exec();
+  }
+
   async getFileData(jobId: string, fileId: string): Promise<Buffer | undefined> {
     const v = await this.r.hget(K.fileData(jobId), fileId);
     return v ? Buffer.from(v, "base64") : undefined;
