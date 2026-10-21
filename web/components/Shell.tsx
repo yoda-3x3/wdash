@@ -7,6 +7,7 @@ import type { Attention, JobRecord, RateLimitInfo } from "@wdash/shared";
 import { usePoll } from "@/lib/client";
 import { PAGES, slideIn, swipeTo, touchSwipeHandlers } from "@/lib/swipe";
 import { Gestures } from "./Gestures";
+import { UpdateBanner } from "./UpdateBanner";
 
 export type BoardState = {
   jobs: JobRecord[];
@@ -71,6 +72,7 @@ export function Shell({ children, wide = false }: { children: React.ReactNode; w
             })}
           </nav>
         </div>
+        <UpdateBanner />
         {error && error !== "signed out" && <div className="bg-bad/10 px-4 py-1 text-center text-xs text-bad">Can't reach wdash: {error}</div>}
       </header>
       <div className="overflow-x-clip">
