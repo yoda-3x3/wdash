@@ -11,9 +11,12 @@ New-Item -ItemType Directory -Force (Split-Path $log) | Out-Null
 
 $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"`"$node`" `"$main`" home >> `"$log`" 2>&1`"" -WorkingDirectory (Join-Path $root "daemon")
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+# Watchdog: every minute, start the daemon if it isn't running (after sleep, a crash, or Ctrl+C on shutdown).
+# A running daemon is left alone (MultipleInstances defaults to IgnoreNew).
+$watchdog = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1)
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
   -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-Register-ScheduledTask -TaskName "wdash-daemon" -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
+Register-ScheduledTask -TaskName "wdash-daemon" -Action $action -Trigger @($trigger, $watchdog) -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName "wdash-daemon"
 Write-Host "wdash-daemon registered and started. Log: $log"
 Write-Host "Tip: keep the PC awake while plugged in: powercfg /change standby-timeout-ac 0"
