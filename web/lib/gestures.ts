@@ -1,6 +1,6 @@
 // Turns MediaPipe gesture-recognizer output into dashboard gestures. Pure, so it can run per video frame.
 
-export type Pose = "thumb_up" | "thumb_down" | "open_palm" | "fist" | "love" | "point_up" | "point_down" | "none";
+export type Pose = "thumb_up" | "thumb_down" | "open_palm" | "fist" | "love" | "point_up" | "point_down" | "point_left" | "point_right" | "none";
 
 /** One-shot actions fired by the tracker; "scroll_*" fire every frame while held. */
 export type GestureAction = "approve" | "deny" | "board" | "prev_page" | "next_page" | "dictate" | "send" | "scroll_up" | "scroll_down";
@@ -19,8 +19,9 @@ const CANNED: Record<string, Pose> = {
 const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
 
 /**
- * The model has no "pointing down", so pointing is read from landmarks: index finger extended,
+ * The model only knows "pointing up", so pointing is read from landmarks: index finger extended,
  * middle/ring/pinky curled (tip closer to the wrist than its middle joint), direction from knuckle to tip.
+ * Left/right are from the user's point of view: the camera image isn't mirrored, so the user's right is -x.
  */
 function pointing(lm: Pt[]): Pose | undefined {
   if (lm.length < 21) return undefined;
@@ -28,10 +29,13 @@ function pointing(lm: Pt[]): Pose | undefined {
   const extended = (tip: number, pip: number) => dist(lm[tip]!, wrist) > dist(lm[pip]!, wrist) * 1.15;
   const curled = (tip: number, pip: number) => dist(lm[tip]!, wrist) < dist(lm[pip]!, wrist);
   if (!extended(8, 6) || !curled(12, 10) || !curled(16, 14) || !curled(20, 18)) return undefined;
+  const dx = lm[8]!.x - lm[5]!.x;
   const dy = lm[8]!.y - lm[5]!.y;
   const len = dist(lm[8]!, lm[5]!);
   if (dy < -0.6 * len) return "point_up";
   if (dy > 0.6 * len) return "point_down";
+  if (dx < -0.6 * len) return "point_right";
+  if (dx > 0.6 * len) return "point_left";
   return undefined;
 }
 
@@ -53,6 +57,8 @@ const HOLD_MS: Partial<Record<Pose, number>> = {
   open_palm: 1200,
   fist: 600,
   love: 700,
+  point_left: 500,
+  point_right: 500,
 };
 const POSE_ACTION: Partial<Record<Pose, GestureAction>> = {
   thumb_up: "approve",
@@ -60,9 +66,9 @@ const POSE_ACTION: Partial<Record<Pose, GestureAction>> = {
   open_palm: "board",
   fist: "send",
   love: "dictate",
+  point_right: "next_page",
+  point_left: "prev_page",
 };
-const SWIPE_WINDOW_MS = 450;
-const SWIPE_DISTANCE = 0.22; // fraction of the frame width
 const STILL = 0.04;
 
 /** Feed it one classified frame at a time; it returns the actions to run for that frame. */
@@ -70,7 +76,6 @@ export class GestureTracker {
   private pose: Pose = "none";
   private since = 0;
   private fired = false;
-  private trail: Array<{ t: number; x: number }> = [];
   private anchor?: Pt;
 
   update(pose: Pose, wrist: Pt | undefined, now: number): GestureAction[] {
@@ -83,25 +88,10 @@ export class GestureTracker {
     if (pose === "point_up") return ["scroll_up"];
     if (pose === "point_down") return ["scroll_down"];
 
-    if (pose === "open_palm" && wrist) {
-      // Swipes work like a carousel: moving the hand to the user's left shows the next page. The camera image
-      // isn't mirrored, so the user's left is +x.
-      this.trail.push({ t: now, x: wrist.x });
-      this.trail = this.trail.filter((p) => now - p.t <= SWIPE_WINDOW_MS);
-      const dx = wrist.x - this.trail[0]!.x;
-      if (Math.abs(dx) >= SWIPE_DISTANCE) {
-        this.trail = [];
-        this.fired = true; // a swipe isn't also a held palm
-        this.since = now;
-        return [dx > 0 ? "next_page" : "prev_page"];
-      }
-      // Holding the palm only counts while it stays put.
-      if (this.anchor && dist(this.anchor, wrist) > STILL) {
-        this.anchor = wrist;
-        this.since = now;
-      }
-    } else {
-      this.trail = [];
+    // Holding the palm only counts while it stays put.
+    if (pose === "open_palm" && wrist && this.anchor && dist(this.anchor, wrist) > STILL) {
+      this.anchor = wrist;
+      this.since = now;
     }
 
     const hold = HOLD_MS[pose];
@@ -133,14 +123,16 @@ export const POSE_EMOJI: Record<Pose, string> = {
   love: "🤟",
   point_up: "☝️",
   point_down: "👇",
+  point_left: "👈",
+  point_right: "👉",
   none: "·",
 };
 
 export const LEGEND: Array<[string, string]> = [
   ["👍 hold", "Allow the next permission request"],
   ["👎 hold", "Deny it"],
-  ["✋ swipe ←", "Next page (Board → Wall → … → Settings)"],
-  ["✋ swipe →", "Previous page"],
+  ["👉 point right", "Next page (Board → Wall → … → Settings)"],
+  ["👈 point left", "Previous page"],
   ["✋ hold still", "Go to the Board"],
   ["☝️ / 👇", "Scroll up / down"],
   ["🤟 hold", "Dictate into the chat box"],

@@ -110,7 +110,7 @@ function Camera({ onStatus, onError }: { onStatus: (s: "loading" | "ready") => v
         case "prev_page":
         case "next_page": {
           const label = await swipeTo(router.push, path, a === "next_page" ? "next" : "prev");
-          say(`${a === "next_page" ? "←" : "→"} ${label}`);
+          say(`${a === "next_page" ? "👉" : "👈"} ${label}`);
           return;
         }
         case "approve":
