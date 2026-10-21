@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Attention } from "@wdash/shared";
 import { api } from "@/lib/client";
 import { GestureTracker, LEGEND, POSE_EMOJI, classify, type GestureAction, type Pose } from "@/lib/gestures";
+import { swipeTo } from "@/lib/swipe";
 import { useBoard } from "./Shell";
 
 const PREF = "wdash:gestures";
@@ -95,7 +96,7 @@ function Camera({ onStatus, onError }: { onStatus: (s: "loading" | "ready") => v
 
   const run = useCallback(
     async (a: GestureAction) => {
-      const { path, state, refresh, router } = ctx.current;
+      const { path, refresh, router } = ctx.current;
       const jobId = path.startsWith("/jobs/") ? path.split("/")[2] : undefined;
       switch (a) {
         case "scroll_up":
@@ -106,14 +107,10 @@ function Camera({ onStatus, onError }: { onStatus: (s: "loading" | "ready") => v
           if (path !== "/") router.push("/");
           say("✋ Board");
           return;
-        case "prev_job":
-        case "next_job": {
-          const jobs = (state?.jobs ?? []).filter((j) => !j.archived);
-          if (!jobs.length) return say("No jobs yet");
-          const i = jobs.findIndex((j) => j.id === jobId);
-          const next = i < 0 ? 0 : (i + (a === "next_job" ? 1 : -1) + jobs.length) % jobs.length;
-          router.push(`/jobs/${jobs[next]!.id}`);
-          say(`${a === "next_job" ? "→" : "←"} ${jobs[next]!.title.slice(0, 40)}`);
+        case "prev_page":
+        case "next_page": {
+          const label = await swipeTo(router.push, path, a === "next_page" ? "next" : "prev");
+          say(`${a === "next_page" ? "←" : "→"} ${label}`);
           return;
         }
         case "approve":

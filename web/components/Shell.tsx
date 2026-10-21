@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { createContext, useContext, useEffect } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { createContext, useContext, useEffect, useMemo, useRef } from "react";
 import type { Attention, JobRecord, RateLimitInfo } from "@wdash/shared";
 import { usePoll } from "@/lib/client";
+import { PAGES, slideIn, swipeTo, touchSwipeHandlers } from "@/lib/swipe";
 import { Gestures } from "./Gestures";
 
 export type BoardState = {
@@ -19,19 +20,19 @@ export type BoardState = {
 const Ctx = createContext<{ state: BoardState | undefined; refresh: () => void; error?: string }>({ state: undefined, refresh: () => {} });
 export const useBoard = () => useContext(Ctx);
 
-const NAV = [
-  { href: "/", label: "Board" },
-  { href: "/wall", label: "Wall" },
-  { href: "/new", label: "New job" },
-  { href: "/chat/new", label: "New chat" },
-  { href: "/inbox", label: "Inbox" },
-  { href: "/settings", label: "Settings" },
-];
+const NAV = PAGES;
 
 export function Shell({ children, wide = false }: { children: React.ReactNode; wide?: boolean }) {
   const { data, refresh, error } = usePoll<BoardState>("/api/state", 5000);
   const path = usePathname();
+  const router = useRouter();
   const inbox = data?.attention.length ?? 0;
+  const main = useRef<HTMLElement>(null);
+
+  // Arriving by a swipe: slide the new page in.
+  useEffect(() => slideIn(main.current), [path]);
+
+  const touch = useMemo(() => touchSwipeHandlers((dir) => void swipeTo(router.push, location.pathname, dir)), [router]);
 
   useEffect(() => {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
@@ -72,7 +73,11 @@ export function Shell({ children, wide = false }: { children: React.ReactNode; w
         </div>
         {error && error !== "signed out" && <div className="bg-bad/10 px-4 py-1 text-center text-xs text-bad">Can't reach wdash: {error}</div>}
       </header>
-      <main className={`mx-auto px-4 pb-24 pt-4 ${wide ? "" : "max-w-5xl"}`}>{children}</main>
+      <div className="overflow-x-clip">
+        <main ref={main} data-page {...touch} className={`mx-auto px-4 pb-24 pt-4 ${wide ? "" : "max-w-5xl"}`}>
+          {children}
+        </main>
+      </div>
       {!wide && (
       <Link
         href="/new"

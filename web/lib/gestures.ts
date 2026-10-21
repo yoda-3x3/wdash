@@ -3,7 +3,7 @@
 export type Pose = "thumb_up" | "thumb_down" | "open_palm" | "fist" | "love" | "point_up" | "point_down" | "none";
 
 /** One-shot actions fired by the tracker; "scroll_*" fire every frame while held. */
-export type GestureAction = "approve" | "deny" | "board" | "prev_job" | "next_job" | "dictate" | "send" | "scroll_up" | "scroll_down";
+export type GestureAction = "approve" | "deny" | "board" | "prev_page" | "next_page" | "dictate" | "send" | "scroll_up" | "scroll_down";
 
 type Pt = { x: number; y: number };
 type Category = { categoryName: string; score: number };
@@ -84,7 +84,8 @@ export class GestureTracker {
     if (pose === "point_down") return ["scroll_down"];
 
     if (pose === "open_palm" && wrist) {
-      // Swipes: the preview is mirrored, so the hand moving to the user's right lowers x in camera space.
+      // Swipes work like a carousel: moving the hand to the user's left shows the next page. The camera image
+      // isn't mirrored, so the user's left is +x.
       this.trail.push({ t: now, x: wrist.x });
       this.trail = this.trail.filter((p) => now - p.t <= SWIPE_WINDOW_MS);
       const dx = wrist.x - this.trail[0]!.x;
@@ -92,7 +93,7 @@ export class GestureTracker {
         this.trail = [];
         this.fired = true; // a swipe isn't also a held palm
         this.since = now;
-        return [dx < 0 ? "next_job" : "prev_job"];
+        return [dx > 0 ? "next_page" : "prev_page"];
       }
       // Holding the palm only counts while it stays put.
       if (this.anchor && dist(this.anchor, wrist) > STILL) {
@@ -138,7 +139,8 @@ export const POSE_EMOJI: Record<Pose, string> = {
 export const LEGEND: Array<[string, string]> = [
   ["👍 hold", "Allow the next permission request"],
   ["👎 hold", "Deny it"],
-  ["✋ swipe ← →", "Previous / next job"],
+  ["✋ swipe ←", "Next page (Board → Wall → … → Settings)"],
+  ["✋ swipe →", "Previous page"],
   ["✋ hold still", "Go to the Board"],
   ["☝️ / 👇", "Scroll up / down"],
   ["🤟 hold", "Dictate into the chat box"],
