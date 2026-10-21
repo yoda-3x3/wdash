@@ -82,6 +82,7 @@ function JobCard({ job, waiting, now }: { job: JobRecord; waiting: number; now: 
       <div className="flex items-center gap-2 text-xs text-muted">
         <span className="font-medium text-fg">{job.project}</span>
         {job.kind === "chat" && <span className="chip bg-info/15 text-info">chat</span>}
+        {job.autoMode && <span className="chip bg-warn/15 text-warn">⚡ auto</span>}
         <span>·</span>
         <span>{timeAgo(job.updatedAt, now)}</span>
         <span className="ml-auto flex gap-1">

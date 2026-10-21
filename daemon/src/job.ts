@@ -374,6 +374,12 @@ export class JobRunner implements AgentHost, TeamApi {
         await this.end("cancelled");
         return;
       }
+      case "set_auto_mode": {
+        // The web app already saved the flag on the job; allow whatever is waiting right now.
+        if (!cmd.enabled) return;
+        for (const p of [...this.pending.values()]) if (p.kind === "permission") p.resolve({ allow: true, scope: "once" });
+        return;
+      }
       case "finish_chat": {
         await this.finishChat();
         return;
@@ -461,6 +467,11 @@ export class JobRunner implements AgentHost, TeamApi {
   }
 
   async requestPermission(agent: AgentRunner, tool: string, input: Record<string, unknown>, title: string, rule: string, signal: AbortSignal): Promise<ApprovalOutcome> {
+    // Read fresh: the user can flip auto mode while the job runs.
+    if ((await this.relay.getJob(this.jobId))?.autoMode) {
+      await this.relay.emit({ jobId: this.jobId, agentId: agent.id, type: "permission_decision", payload: { allow: true, auto: true, tool, title } });
+      return { allow: true, scope: "once" };
+    }
     const out = await this.waitForUser(agent, "permission", tool, input, title, rule, signal);
     return out;
   }

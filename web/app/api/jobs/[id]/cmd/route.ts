@@ -69,6 +69,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const known = new Set((await listFiles(id)).map((f) => f.id));
     if (!cmd.attachments.every((f) => known.has(f))) return NextResponse.json({ error: "Unknown attachment." }, { status: 400 });
   }
+  if (cmd.type === "set_auto_mode") {
+    // Saved on the job so the runner (and any later runner) reads it; the command lets a live runner allow what's waiting.
+    await updateJob(id, { autoMode: cmd.enabled });
+    await emit(id, "info", { text: cmd.enabled ? "Auto mode on: permission requests are approved automatically." : "Auto mode off: permission requests ask you again." });
+    if (live) await pushCommand(id, cmd);
+    return NextResponse.json({ ok: true });
+  }
   if (live) {
     await pushCommand(id, cmd);
     return NextResponse.json({ ok: true, delivered: "runner" });

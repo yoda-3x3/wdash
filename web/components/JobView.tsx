@@ -185,6 +185,21 @@ function Header({ job, lease, onChange }: { job: JobRecord; lease: string | null
         {job.mergeState !== "none" && <span>merge: {job.mergeState.replaceAll("_", " ")}</span>}
         {lease && <span>runner: {lease.startsWith("cloud") ? "cloud" : "PC"}</span>}
         <span className="ml-auto flex gap-2">
+          {!terminal && (
+            <button
+              className={`btn ${job.autoMode ? "border-warn/60 text-warn" : ""}`}
+              disabled={busy}
+              title={job.autoMode ? "Permission requests are approved automatically. Click to ask again." : "Approve permission requests automatically"}
+              onClick={() =>
+                cmd(
+                  { cmd: { type: "set_auto_mode", enabled: !job.autoMode } },
+                  job.autoMode ? undefined : "Turn on auto mode? Agents can run shell commands and fetch web pages without asking (still only inside this job's folder). Requests already waiting are approved too.",
+                )
+              }
+            >
+              ⚡ Auto {job.autoMode ? "on" : "off"}
+            </button>
+          )}
           {!terminal && job.status !== "paused" && (
             <button className="btn" disabled={busy} onClick={() => cmd({ cmd: { type: "pause" } })}>
               Pause
@@ -320,7 +335,7 @@ function Timeline({ events, agents }: { events: WdEvent[]; agents: AgentRecord[]
   const rows = useMemo(() => {
     const out: Row[] = [];
     for (const e of events) {
-      if (QUIET.includes(e.type) || e.type === "tool_result") continue;
+      if ((QUIET.includes(e.type) && !(e.type === "permission_decision" && e.payload.auto)) || e.type === "tool_result") continue;
       if (filter !== "all" && e.agentId !== filter && e.agentId) continue;
       if (e.subagentId) {
         const last = out.at(-1);
@@ -425,6 +440,12 @@ function EventRow({ e, result, answer }: { e: WdEvent; result?: WdEvent; answer?
       return (
         <div className="rounded-lg border border-warn/40 px-3 py-1.5 text-xs">
           {head}permission requested: <span className="font-mono">{String(p.title)}</span>
+        </div>
+      );
+    case "permission_decision":
+      return (
+        <div className="px-3 py-0.5 text-xs text-muted">
+          {head}⚡ auto-approved: <span className="font-mono">{String(p.title)}</span>
         </div>
       );
     case "question":

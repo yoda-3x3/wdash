@@ -98,6 +98,8 @@ export const JobRecord = z.object({
   cmdCursor: z.string().optional(),
   mergeState: MergeState.default("none"),
   archived: bool.default(false),
+  /** Approve permission requests automatically (hard denies still apply; questions still go to the user). */
+  autoMode: bool.default(false),
 });
 export type JobRecord = z.infer<typeof JobRecord>;
 
@@ -147,6 +149,7 @@ export const NewJobInput = z.object({
   workers: z.enum(["auto", "1", "2", "3", "4"]).default("auto"),
   budgetUsd: z.number().positive().max(500).optional(),
   reviewCap: z.number().int().min(1).max(10).default(3),
+  autoMode: z.boolean().default(false),
   /** Upload ids from POST /api/uploads. */
   attachments: z.array(z.string()).max(MAX_ATTACHMENTS).default([]),
 });
@@ -254,6 +257,8 @@ export const Command = z.discriminatedUnion("type", [
   z.object({ type: z.literal("guidance"), agentId: z.string(), text: z.string().min(1).max(10_000) }),
   /** Chat jobs: commit the agent's changes and merge them like a finished job. */
   z.object({ type: z.literal("finish_chat") }),
+  /** Turn auto mode on/off; turning it on also allows the requests already waiting. */
+  z.object({ type: z.literal("set_auto_mode"), enabled: z.boolean() }),
 ]);
 export type Command = z.infer<typeof Command>;
 

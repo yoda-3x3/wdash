@@ -9,6 +9,7 @@ import { useBoard } from "./Shell";
 import { AttachButton, FileChips, dropProps, useUploads } from "./Attachments";
 
 const LAST_PROJECT = "wdash:lastProject";
+const AUTO_MODE = "wdash:autoMode";
 
 const CHAT_MODELS: Record<ChatModel, string> = { sonnet: "Sonnet", opus: "Opus", haiku: "Haiku" };
 
@@ -26,6 +27,15 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
   const [workers, setWorkers] = useState("auto");
   const [models, setModels] = useState<ModelPreset>("opus-sonnet");
   const [chatModel, setChatModel] = useState<ChatModel>("sonnet");
+  const [autoMode, setAutoMode] = useState(false);
+
+  useEffect(() => {
+    try {
+      setAutoMode(localStorage.getItem(AUTO_MODE) === "1");
+    } catch {
+      /* storage blocked */
+    }
+  }, []);
   const [runOn, setRunOn] = useState("auto");
   const [budget, setBudget] = useState("");
   const [reviewCap, setReviewCap] = useState(3);
@@ -56,6 +66,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
     try {
       try {
         localStorage.setItem(LAST_PROJECT, project);
+        localStorage.setItem(AUTO_MODE, autoMode ? "1" : "0");
       } catch {
         /* ignore */
       }
@@ -68,6 +79,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
         models,
         runOn,
         reviewCap,
+        autoMode,
         budgetUsd: budget ? Number(budget) : undefined,
         attachments: files.ready.map((f) => f.id),
       });
@@ -151,6 +163,16 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
           </select>
         </Field>
       )}
+
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" className="mt-1" checked={autoMode} onChange={(e) => setAutoMode(e.target.checked)} />
+        <span>
+          <span className="font-medium">⚡ Auto mode</span>
+          <span className="block text-xs text-muted">
+            Approve permission requests (shell commands, web fetches) automatically. Agents still can't touch anything outside the job's folder, and questions still come to you. You can switch it on or off while the job runs.
+          </span>
+        </span>
+      </label>
 
       <button type="button" className="text-sm text-accent" onClick={() => setAdvanced((v) => !v)}>
         {advanced ? "▾" : "▸"} Advanced
