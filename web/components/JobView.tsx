@@ -878,8 +878,8 @@ function ChatBox({ jobId, agents, lead, asking }: { jobId: string; agents: Agent
             ))}
           </select>
         )}
-        <input className="input" placeholder={asking.includes(to) ? `Answer ${to}'s question…` : `Message ${to}…`} value={text} onChange={(e) => setText(e.target.value)} />
-        <button className="btn btn-primary" disabled={!canSend}>
+        <input data-chat-input className="input" placeholder={asking.includes(to) ? `Answer ${to}'s question…` : `Message ${to}…`} value={text} onChange={(e) => setText(e.target.value)} />
+        <button data-chat-send className="btn btn-primary" disabled={!canSend}>
           Send
         </button>
       </div>

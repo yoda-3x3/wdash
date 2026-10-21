@@ -13,3 +13,6 @@ daemon/.state/
 
 .vercel
 .env*
+
+# Copied from node_modules at build (scripts/copy-mediapipe.mjs)
+web/public/mediapipe/wasm/
