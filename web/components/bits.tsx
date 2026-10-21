@@ -47,6 +47,41 @@ export function Bar({ value, max, tone = "accent" }: { value: number; max: numbe
 }
 
 /** One actionable stop (SPEC.md §11.1) with its buttons inline. */
+/** Allows every pending permission request in `items` once (the same as pressing each card's Allow). */
+export function ApproveAll({ items, onDone }: { items: Attention[]; onDone?: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>();
+  const perms = items.filter((a) => a.reason === "permission" && a.ref);
+  if (perms.length < 1) return null;
+  return (
+    <span className="inline-flex items-center gap-2">
+      <button
+        className="btn btn-primary"
+        disabled={busy}
+        onClick={async () => {
+          if (!confirm(`Allow all ${perms.length} pending permission request${perms.length === 1 ? "" : "s"}?`)) return;
+          setBusy(true);
+          setErr(undefined);
+          const failed: string[] = [];
+          for (const a of perms) {
+            try {
+              await api(`/api/jobs/${a.jobId}/cmd`, { cmd: { type: "decide", requestId: a.ref, allow: true, scope: "once" } });
+            } catch (e) {
+              failed.push((e as Error).message);
+            }
+          }
+          if (failed.length) setErr(`${failed.length} failed: ${failed[0]}`);
+          setBusy(false);
+          onDone?.();
+        }}
+      >
+        {busy ? "Approving…" : `Approve all (${perms.length})`}
+      </button>
+      {err && <span className="text-xs text-bad">{err}</span>}
+    </span>
+  );
+}
+
 export function AttentionCard({ att, onDone, showJob }: { att: Attention; onDone?: () => void; showJob?: string }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string>();

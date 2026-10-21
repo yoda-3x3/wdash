@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { TERMINAL_STATUSES, type JobRecord } from "@wdash/shared";
 import { api, timeAgo, usd } from "@/lib/client";
-import { AttentionCard, Bar, LocationBadge, StatusChip } from "./bits";
+import { ApproveAll, AttentionCard, Bar, LocationBadge, StatusChip } from "./bits";
 import { useBoard } from "./Shell";
 
 export function Board() {
@@ -27,11 +27,14 @@ export function Board() {
         <section className="space-y-2">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-muted">Needs you</h2>
-            {state.attention.length > 3 && (
-              <Link href="/inbox" className="text-xs text-accent">
-                All {state.attention.length} →
-              </Link>
-            )}
+            <span className="flex items-center gap-3">
+              {state.attention.filter((a) => a.reason === "permission").length > 1 && <ApproveAll items={state.attention} onDone={refresh} />}
+              {state.attention.length > 3 && (
+                <Link href="/inbox" className="text-xs text-accent">
+                  All {state.attention.length} →
+                </Link>
+              )}
+            </span>
           </div>
           {top.map((a) => (
             <AttentionCard key={a.id} att={a} onDone={refresh} showJob={state.jobs.find((j) => j.id === a.jobId)?.title} />

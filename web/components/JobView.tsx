@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentRecord, Approval, Attachment, Attention, JobRecord, WdEvent } from "@wdash/shared";
 import { CHAT_AGENT, TERMINAL_STATUSES } from "@wdash/shared";
 import { api, timeAgo, usd, usePoll } from "@/lib/client";
-import { AttentionCard, Bar, LocationBadge, StatusChip } from "./bits";
+import { ApproveAll, AttentionCard, Bar, LocationBadge, StatusChip } from "./bits";
 import { AttachButton, FileChips, dropProps, fmtSize, useUploads } from "./Attachments";
 
 type Detail = {
@@ -51,6 +51,11 @@ export function JobView({ id }: { id: string }) {
 
       {detail.attention.some((a) => a.reason !== "question") && (
         <div className="space-y-2">
+          {detail.attention.filter((a) => a.reason === "permission").length > 1 && (
+            <div className="flex justify-end">
+              <ApproveAll items={detail.attention} onDone={refresh} />
+            </div>
+          )}
           {detail.attention
             .filter((a) => a.reason !== "question")
             .map((a) => (
