@@ -70,14 +70,21 @@ export function predictGaze(m: GazeModel, f: number[]): Pt {
 /** 3×3 calibration targets, inset from the edges (fractions of the viewport). */
 export const CALIBRATION_POINTS: Pt[] = [0.1, 0.5, 0.9].flatMap((y) => [0.1, 0.5, 0.9].map((x) => ({ x, y })));
 
-/** Exponential smoothing; jumps far away are followed faster so the dot doesn't lag across the screen. */
+/**
+ * Exponential smoothing with a dead zone: tiny movements (webcam noise) are ignored, small ones are smoothed
+ * heavily, and big jumps (looking somewhere else) are followed faster so the dot doesn't lag across the screen.
+ */
 export class Smoother {
   private p?: Pt;
-  constructor(private readonly alpha = 0.18) {}
+  constructor(
+    private readonly alpha = 0.12,
+    private readonly deadZone = 0.012,
+  ) {}
   next(q: Pt): Pt {
     if (!this.p) return (this.p = q);
-    const far = Math.hypot(q.x - this.p.x, q.y - this.p.y) > 0.25;
-    const a = far ? 0.5 : this.alpha;
+    const d = Math.hypot(q.x - this.p.x, q.y - this.p.y);
+    if (d < this.deadZone) return this.p;
+    const a = d > 0.25 ? 0.45 : this.alpha;
     this.p = { x: this.p.x + a * (q.x - this.p.x), y: this.p.y + a * (q.y - this.p.y) };
     return this.p;
   }
@@ -132,9 +139,27 @@ export class BlinkTracker {
   }
 }
 
-/** Scroll speed from gaze height: look into the top/bottom 12% of the screen to scroll that way. */
+/** Scroll speed from gaze height: the top/bottom 10% of the screen scrolls that way. */
 export function scrollFor(y: number): number {
-  if (y < 0.12) return -Math.round(4 + (0.12 - y) * 150);
-  if (y > 0.88) return Math.round(4 + (y - 0.88) * 150);
+  if (y < 0.1) return -Math.round(4 + (0.1 - y) * 150);
+  if (y > 0.9) return Math.round(4 + (y - 0.9) * 150);
   return 0;
+}
+
+/**
+ * Only scroll after the gaze has stayed in an edge zone for a moment with nothing clickable under it,
+ * so glancing at the top tabs (or a button near the bottom) doesn't move the page.
+ */
+export class ScrollGate {
+  private since?: number;
+  constructor(private readonly dwellMs = 500) {}
+  update(y: number, onTarget: boolean, now: number): number {
+    const dy = scrollFor(y);
+    if (!dy || onTarget) {
+      this.since = undefined;
+      return 0;
+    }
+    this.since ??= now;
+    return now - this.since >= this.dwellMs ? dy : 0;
+  }
 }

@@ -3,7 +3,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { decideNext, jobIdFromPath } from "@/lib/decide";
-import { BlinkTracker, CALIBRATION_POINTS, Smoother, fitGaze, gazeFeatures, predictGaze, scrollFor, type Blend, type GazeModel } from "@/lib/eyes";
+import { BlinkTracker, CALIBRATION_POINTS, ScrollGate, Smoother, fitGaze, gazeFeatures, predictGaze, type Blend, type GazeModel } from "@/lib/eyes";
 import { useBoard } from "./Shell";
 
 const PREF = "wdash:eyes";
@@ -11,6 +11,8 @@ const MODEL_KEY = "wdash:gazeModel";
 const FRAME_MS = 50;
 const SETTLE_MS = 700; // per calibration dot: time to look at it…
 const SAMPLE_MS = 900; // …then time to collect samples
+const SNAP_PX = 90; // webcam gaze is rough: snap to the nearest clickable within this distance
+const CLICKABLE = "a[href], button:not([disabled]), [role=tab], select, input, textarea, summary, section[data-href]";
 
 type Landmarker = {
   detectForVideo: (v: HTMLVideoElement, t: number) => {
@@ -99,14 +101,36 @@ function Tracker({ onClose }: { onClose: () => void }) {
     let timer: ReturnType<typeof setTimeout>;
     const smooth = new Smoother();
     const blinks = new BlinkTracker();
+    const scroller = new ScrollGate();
+    let current: HTMLElement | undefined;
     // Calibration state, driven from the frame loop.
     let cal: { i: number; start: number; samples: Array<[number[], { x: number; y: number }]> } | undefined;
 
+    /** Distance from a point to an element's box (0 inside it). */
+    const away = (el: HTMLElement, x: number, y: number) => {
+      const r = el.getBoundingClientRect();
+      return Math.hypot(Math.max(r.left - x, 0, x - r.right), Math.max(r.top - y, 0, y - r.bottom));
+    };
+    /**
+     * The clickable the user is looking at: the one under the dot, else the nearest within SNAP_PX. Sticks with
+     * the current one unless another is clearly closer, so the highlight doesn't flicker between neighbours.
+     */
     const target = (x: number, y: number): { el?: HTMLElement; tile?: HTMLElement } => {
-      const at = document.elementFromPoint(x, y) as HTMLElement | null;
-      const tile = at?.closest<HTMLElement>("[data-wall-tile], section[data-href]") ?? undefined;
-      const el = tile ?? at?.closest<HTMLElement>("a, button, [role=tab], select, input, textarea, summary") ?? undefined;
-      return { el, tile };
+      const under = (document.elementFromPoint(x, y) as HTMLElement | null)?.closest<HTMLElement>(CLICKABLE) ?? undefined;
+      let best = under;
+      let bestD = under ? 0 : Infinity;
+      if (!best) {
+        for (const el of document.querySelectorAll<HTMLElement>(CLICKABLE)) {
+          if (el.offsetParent === null && el.tagName !== "SECTION") continue; // hidden
+          const d = away(el, x, y);
+          if (d < bestD) [best, bestD] = [el, d];
+        }
+        if (bestD > SNAP_PX) best = undefined;
+      }
+      if (current && current.isConnected && best !== current && away(current, x, y) < bestD + 25) best = current;
+      current = best;
+      const tile = best?.matches("section[data-href]") ? best : (best?.closest<HTMLElement>("section[data-href]") ?? undefined);
+      return { el: best, tile };
     };
 
     calibrate.current = () => {
@@ -190,7 +214,7 @@ function Tracker({ onClose }: { onClose: () => void }) {
             setDot({ x, y });
             const { el, tile } = target(x, y);
             setBox(el?.getBoundingClientRect());
-            const dy = scrollFor(g.y);
+            const dy = scroller.update(g.y, !!el, now);
             if (dy) window.scrollBy({ top: dy });
             setRing(blinks.progress(now));
             for (const ev of blinks.update(blend, now)) {
