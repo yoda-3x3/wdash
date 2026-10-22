@@ -3,7 +3,7 @@
 # so this file inlines the steps of .github/workflows/wdash-run.yml instead (keep them in sync).
 #
 # Copy to <your project>/.github/workflows/wdash.yml on the project's base branch and replace
-# yoda-3x3/wdash with your wdash repo. Secrets go in the PROJECT repo (scripts/setup.mjs sets them);
+# OWNER/wdash with your wdash repo. Secrets go in the PROJECT repo (scripts/setup.mjs sets them);
 # WDASH_REPO_TOKEN must be able to read the wdash repo.
 name: wdash
 
@@ -36,7 +36,7 @@ jobs:
       - name: Check out wdash
         uses: actions/checkout@v4
         with:
-          repository: yoda-3x3/wdash
+          repository: OWNER/wdash
           ref: main
           path: wdash
           token: ${{ secrets.WDASH_REPO_TOKEN }}

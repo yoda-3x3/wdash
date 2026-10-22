@@ -48,9 +48,15 @@ export async function enableCloud(name: string, relay?: Relay): Promise<string[]
   log.push(`set Actions secrets on ${repo}`);
 
   // 2. Caller workflow. Another owner can't call wdash's private reusable workflow, so it gets the standalone one.
-  const wdashOwner = ((await tryGit(WDASH_ROOT, "remote", "get-url", "origin")) ?? "").match(/github\.com[/:]([^/]+)\//)?.[1]?.toLowerCase();
-  const sameOwner = !wdashOwner || repo.split("/")[0]!.toLowerCase() === wdashOwner;
-  const template = readFileSync(join(WDASH_ROOT, "templates", sameOwner ? "project-wdash.yml" : "project-wdash-standalone.yml"), "utf8");
+  const wdashRepo = ((await tryGit(WDASH_ROOT, "remote", "get-url", "origin")) ?? "").match(/github\.com[/:]([^/]+\/[^/.]+?)(?:\.git)?$/)?.[1];
+  if (!wdashRepo) throw new Error("Couldn't tell which GitHub repo wdash is (git remote origin).");
+  const sameOwner = repo.split("/")[0]!.toLowerCase() === wdashRepo.split("/")[0]!.toLowerCase();
+  // The templates say OWNER/wdash; fill in this wdash repo.
+  const template = readFileSync(join(WDASH_ROOT, "templates", sameOwner ? "project-wdash.yml" : "project-wdash-standalone.yml"), "utf8").replaceAll(
+    "OWNER/wdash",
+    wdashRepo,
+  );
+  if (template.includes("OWNER/")) throw new Error("The workflow template still has an OWNER placeholder.");
   const rel = ".github/workflows/wdash.yml";
   const target = join(project.localPath, rel);
   const current = existsSync(target) ? readFileSync(target, "utf8") : undefined;
