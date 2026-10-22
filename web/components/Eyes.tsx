@@ -3,11 +3,25 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { decideNext, jobIdFromPath } from "@/lib/decide";
-import { BlinkTracker, CALIBRATION_POINTS, ScrollGate, Smoother, fitGaze, gazeFeatures, predictGaze, type Blend, type GazeModel } from "@/lib/eyes";
+import {
+  BlinkTracker,
+  CALIBRATION_POINTS,
+  DAMPING_DEFAULT,
+  DAMPING_MAX,
+  DAMPING_MIN,
+  ScrollGate,
+  Smoother,
+  fitGaze,
+  gazeFeatures,
+  predictGaze,
+  type Blend,
+  type GazeModel,
+} from "@/lib/eyes";
 import { useBoard } from "./Shell";
 
 const PREF = "wdash:eyes";
 const MODEL_KEY = "wdash:gazeModel";
+const DAMPING_KEY = "wdash:gazeDamping";
 const FRAME_MS = 50;
 const SETTLE_MS = 700; // per calibration dot: time to look at it…
 const SAMPLE_MS = 900; // …then time to collect samples
@@ -87,6 +101,26 @@ function Tracker({ onClose }: { onClose: () => void }) {
   const ctx = useRef({ path, refresh, router });
   ctx.current = { path, refresh, router };
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [damping, setDamping] = useState(DAMPING_DEFAULT);
+  const smootherRef = useRef<Smoother | undefined>(undefined);
+
+  useEffect(() => {
+    try {
+      const v = Number(localStorage.getItem(DAMPING_KEY));
+      if (v >= DAMPING_MIN && v <= DAMPING_MAX) setDamping(v);
+    } catch {
+      /* storage blocked */
+    }
+  }, []);
+
+  useEffect(() => {
+    smootherRef.current?.setDamping(damping);
+    try {
+      localStorage.setItem(DAMPING_KEY, String(damping));
+    } catch {
+      /* ignore */
+    }
+  }, [damping]);
 
   const say = useCallback((t: string) => {
     setToast(t);
@@ -99,7 +133,8 @@ function Tracker({ onClose }: { onClose: () => void }) {
     let stream: MediaStream | undefined;
     let lm: Landmarker | undefined;
     let timer: ReturnType<typeof setTimeout>;
-    const smooth = new Smoother();
+    const smooth = new Smoother(damping);
+    smootherRef.current = smooth;
     const blinks = new BlinkTracker();
     const scroller = new ScrollGate();
     let current: HTMLElement | undefined;
@@ -208,7 +243,7 @@ function Tracker({ onClose }: { onClose: () => void }) {
               }
             }
           } else if (f && model.current) {
-            const g = smooth.next(predictGaze(model.current, f));
+            const g = smooth.next(predictGaze(model.current, f), now);
             const x = g.x * innerWidth;
             const y = g.y * innerHeight;
             setDot({ x, y });
@@ -252,6 +287,7 @@ function Tracker({ onClose }: { onClose: () => void }) {
       stream?.getTracks().forEach((t) => t.stop());
       lm?.close();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- damping changes go through smootherRef
   }, [say]);
 
   const calPoint = calIndex >= 0 ? CALIBRATION_POINTS[calIndex] : undefined;
@@ -290,9 +326,25 @@ function Tracker({ onClose }: { onClose: () => void }) {
         <div className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-full bg-panel px-3 py-1.5 text-xs shadow-lg ring-1 ring-line">
           <span>{status === "loading" ? "👁 Loading eye tracking…" : status === "error" ? `👁 ${err}` : (toast ?? "👁 Look to point · long blink = click · wink L/R = allow/deny")}</span>
           {status === "ready" && (
-            <button className="text-accent" onClick={() => calibrate.current()}>
-              Recalibrate
-            </button>
+            <>
+              <label className="flex items-center gap-1 text-muted" title="Damping: higher is steadier, lower follows your eyes faster">
+                Damping
+                <input
+                  type="range"
+                  min={DAMPING_MIN}
+                  max={DAMPING_MAX}
+                  step={1}
+                  value={damping}
+                  onChange={(e) => setDamping(Number(e.target.value))}
+                  className="w-20 accent-[var(--accent)]"
+                  aria-label="Gaze damping"
+                />
+                <span className="w-3 text-fg">{damping}</span>
+              </label>
+              <button className="text-accent" onClick={() => calibrate.current()}>
+                Recalibrate
+              </button>
+            </>
           )}
           <button className="text-muted" onClick={onClose} aria-label="Turn off eye tracking">
             ✕

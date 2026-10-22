@@ -70,23 +70,66 @@ export function predictGaze(m: GazeModel, f: number[]): Pt {
 /** 3×3 calibration targets, inset from the edges (fractions of the viewport). */
 export const CALIBRATION_POINTS: Pt[] = [0.1, 0.5, 0.9].flatMap((y) => [0.1, 0.5, 0.9].map((x) => ({ x, y })));
 
+/** Damping levels for the UI slider: 1 = light (responsive) … 10 = heavy (very steady). */
+export const DAMPING_MIN = 1;
+export const DAMPING_MAX = 10;
+export const DAMPING_DEFAULT = 6;
+
+/** One axis of a One Euro filter: heavy smoothing when still, less lag when moving fast. */
+class OneEuro {
+  private x?: number;
+  private dx = 0;
+  constructor(
+    public minCutoff: number,
+    public beta: number,
+    private readonly dCutoff = 1,
+  ) {}
+  private static alpha(cutoff: number, dt: number) {
+    const tau = 1 / (2 * Math.PI * cutoff);
+    return 1 / (1 + tau / dt);
+  }
+  next(v: number, dt: number): number {
+    if (this.x === undefined) return (this.x = v);
+    const rawDx = (v - this.x) / dt;
+    this.dx += OneEuro.alpha(this.dCutoff, dt) * (rawDx - this.dx);
+    const cutoff = this.minCutoff + this.beta * Math.abs(this.dx);
+    this.x += OneEuro.alpha(cutoff, dt) * (v - this.x);
+    return this.x;
+  }
+}
+
 /**
- * Exponential smoothing with a dead zone: tiny movements (webcam noise) are ignored, small ones are smoothed
- * heavily, and big jumps (looking somewhere else) are followed faster so the dot doesn't lag across the screen.
+ * Gaze dampening: a One Euro filter per axis (steady while you look at one place, quick when you look
+ * somewhere else) plus a dead zone that ignores webcam jitter. `damping` 1-10 trades responsiveness for calm.
  */
 export class Smoother {
+  private fx: OneEuro;
+  private fy: OneEuro;
+  private last?: number;
   private p?: Pt;
-  constructor(
-    private readonly alpha = 0.12,
-    private readonly deadZone = 0.012,
-  ) {}
-  next(q: Pt): Pt {
-    if (!this.p) return (this.p = q);
-    const d = Math.hypot(q.x - this.p.x, q.y - this.p.y);
-    if (d < this.deadZone) return this.p;
-    const a = d > 0.25 ? 0.45 : this.alpha;
-    this.p = { x: this.p.x + a * (q.x - this.p.x), y: this.p.y + a * (q.y - this.p.y) };
-    return this.p;
+  private deadZone = 0.01;
+
+  constructor(damping = DAMPING_DEFAULT) {
+    this.fx = new OneEuro(1, 1);
+    this.fy = new OneEuro(1, 1);
+    this.setDamping(damping);
+  }
+
+  setDamping(level: number): void {
+    const t = (Math.min(DAMPING_MAX, Math.max(DAMPING_MIN, level)) - DAMPING_MIN) / (DAMPING_MAX - DAMPING_MIN);
+    const minCutoff = 2 * Math.pow(0.02, t); // 2 Hz (light) → 0.04 Hz (heavy), on a log scale
+    const beta = 2.5 * (1 - 0.8 * t); // how much fast movement loosens the filter
+    for (const f of [this.fx, this.fy]) [f.minCutoff, f.beta] = [minCutoff, beta];
+    this.deadZone = 0.004 + 0.016 * t;
+  }
+
+  /** `now` in ms. */
+  next(q: Pt, now: number): Pt {
+    const dt = this.last === undefined ? 1 / 20 : Math.max(1e-3, (now - this.last) / 1000);
+    this.last = now;
+    const f = { x: this.fx.next(q.x, dt), y: this.fy.next(q.y, dt) };
+    if (this.p && Math.hypot(f.x - this.p.x, f.y - this.p.y) < this.deadZone) return this.p;
+    return (this.p = f);
   }
 }
 
