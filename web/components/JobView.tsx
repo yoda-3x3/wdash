@@ -315,7 +315,6 @@ type Row = { kind: "event"; e: WdEvent } | { kind: "sub"; id: string; type?: str
 
 function Timeline({ events, agents }: { events: WdEvent[]; agents: AgentRecord[] }) {
   const [filter, setFilter] = useState<string>("all");
-  const bottom = useRef<HTMLDivElement>(null);
   const [follow, setFollow] = useState(true);
 
   const results = useMemo(() => {
@@ -349,7 +348,8 @@ function Timeline({ events, agents }: { events: WdEvent[]; agents: AgentRecord[]
   }, [events, filter]);
 
   useEffect(() => {
-    if (follow) bottom.current?.scrollIntoView({ block: "end" });
+    // To the true bottom of the page: the chat box sits below the timeline's end marker.
+    if (follow) window.scrollTo({ top: document.documentElement.scrollHeight });
   }, [rows.length, follow]);
 
   // Scrolling up to read pauses follow (so new activity doesn't yank you back down); reaching the bottom resumes it.
@@ -402,7 +402,6 @@ function Timeline({ events, agents }: { events: WdEvent[]; agents: AgentRecord[]
           ),
         )}
       </div>
-      <div ref={bottom} />
     </div>
   );
 }
