@@ -4,6 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GestureTracker, LEGEND, MIN_CONFIDENCE, POSE_EMOJI, classify, type GestureAction, type Pose } from "@/lib/gestures";
 import { decideNext } from "@/lib/decide";
+import { onListening, sendChat, startDictation, stopDictation } from "@/lib/handsfree";
 import { swipeTo } from "@/lib/swipe";
 import { useBoard } from "./Shell";
 
@@ -16,7 +17,6 @@ type Recognizer = {
   close: () => void;
 };
 
-type SpeechRec = { lang: string; interimResults: boolean; continuous: boolean; start: () => void; stop: () => void; onresult: ((e: unknown) => void) | null; onend: (() => void) | null; onerror: ((e: unknown) => void) | null };
 
 /** Header toggle + camera overlay. Video never leaves the device: MediaPipe runs in the page. */
 export function Gestures() {
@@ -84,8 +84,8 @@ function Camera({ onStatus, onError, onClose }: { onStatus: (s: "loading" | "rea
     pausedRef.current = p;
     setPaused(p);
   }, []);
-  const speech = useRef<SpeechRec | undefined>(undefined);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => onListening(setListening), []);
 
   const cb = useRef({ onStatus, onError });
   cb.current = { onStatus, onError };
@@ -145,52 +145,11 @@ function Camera({ onStatus, onError, onClose }: { onStatus: (s: "loading" | "rea
           return;
         }
         case "dictate":
-          return startDictation();
-        case "send":
-          if (speech.current) {
-            speech.current.stop();
-            // Let the final transcript land before sending.
-            setTimeout(() => clickSend(), 400);
-          } else clickSend();
+          say(`🤟 ${startDictation("make a fist")}`);
           return;
-      }
-
-      function clickSend() {
-        const btn = document.querySelector<HTMLButtonElement>("[data-chat-send]");
-        if (!btn) return say("✊ No chat box on this page");
-        if (btn.disabled) return say("✊ Nothing to send");
-        btn.click();
-        say("✊ Sent");
-      }
-
-      function startDictation() {
-        const input = document.querySelector<HTMLInputElement>("[data-chat-input]");
-        if (!input) return say("🤟 Open a job or chat to dictate");
-        const W = window as unknown as { SpeechRecognition?: new () => SpeechRec; webkitSpeechRecognition?: new () => SpeechRec };
-        const Ctor = W.SpeechRecognition ?? W.webkitSpeechRecognition;
-        if (!Ctor) return say("🤟 This browser can't do voice dictation (try Chrome)");
-        if (speech.current) return;
-        const rec = new Ctor();
-        rec.lang = navigator.language || "en-US";
-        rec.interimResults = true;
-        rec.continuous = true;
-        const before = input.value ? `${input.value} ` : "";
-        rec.onresult = (e) => {
-          const results = (e as { results: ArrayLike<ArrayLike<{ transcript: string }>> }).results;
-          let text = "";
-          for (let i = 0; i < results.length; i++) text += results[i]![0]!.transcript;
-          setReactInput(input, before + text.trim());
-        };
-        rec.onend = () => {
-          speech.current = undefined;
-          setListening(false);
-        };
-        rec.onerror = () => say("🎤 Dictation stopped (microphone blocked?)");
-        speech.current = rec;
-        setListening(true);
-        input.focus();
-        rec.start();
-        say("🎤 Listening… make a fist to send");
+        case "send":
+          say(`✊ ${await sendChat()}`);
+          return;
       }
     },
     [say, setPause],
@@ -258,7 +217,7 @@ function Camera({ onStatus, onError, onClose }: { onStatus: (s: "loading" | "rea
       clearTimeout(timer);
       stream?.getTracks().forEach((t) => t.stop());
       recognizer?.close();
-      speech.current?.stop();
+      stopDictation();
     };
   }, [run]);
 
@@ -317,10 +276,4 @@ function Camera({ onStatus, onError, onClose }: { onStatus: (s: "loading" | "rea
       {toast && <div className="rounded-lg bg-panel px-3 py-2 text-sm shadow-lg ring-1 ring-line">{toast}</div>}
     </div>
   );
-}
-
-/** Set a React-controlled input's value so its onChange fires. */
-function setReactInput(el: HTMLInputElement, value: string) {
-  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(el, value);
-  el.dispatchEvent(new Event("input", { bubbles: true }));
 }
