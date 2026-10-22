@@ -3,7 +3,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { decideNext, jobIdFromPath } from "@/lib/decide";
-import { FACE_EMOJI, FACE_LEGEND, FaceTracker, headPose, mouthBox, tongueFraction, type Blend, type FacePose } from "@/lib/face";
+import { FACE_EMOJI, FACE_LEGEND, FaceTracker, headPose, type Blend, type FacePose } from "@/lib/face";
 import type { GestureAction } from "@/lib/gestures";
 import { onListening, sendChat, startDictation, stopDictation } from "@/lib/handsfree";
 import { swipeTo } from "@/lib/swipe";
@@ -65,7 +65,7 @@ export function Face() {
         type="button"
         onClick={toggle}
         className={`chip shrink-0 border ${on ? "border-accent bg-accent/15 text-accent" : "border-line text-muted"}`}
-        title={on ? "Turn off face control (Ctrl+G, or stick out your tongue)" : "Control wdash with head turns and expressions (Ctrl+G). Camera stays on this device"}
+        title={on ? "Turn off face control (Ctrl+G, or raise your eyebrows)" : "Control wdash with head turns and expressions (Ctrl+G). Camera stays on this device"}
         aria-pressed={on}
       >
         🙂<span className="hidden sm:inline">{on ? "Face on" : "Face"}</span>
@@ -121,10 +121,6 @@ function FaceControl({ onClose }: { onClose: () => void }) {
           say(`😉 ${await decideNext(a === "approve", jobIdFromPath(path))}`);
           refresh();
           return;
-        case "board":
-          if (path !== "/") router.push("/");
-          say("🤨 Board");
-          return;
         case "dictate":
           say(`😮 ${startDictation("smile")}`);
           return;
@@ -142,18 +138,6 @@ function FaceControl({ onClose }: { onClose: () => void }) {
     let lm: Landmarker | undefined;
     let timer: ReturnType<typeof setTimeout>;
     const tracker = new FaceTracker();
-    const canvas = document.createElement("canvas");
-    canvas.width = 24;
-    canvas.height = 16;
-    const c2d = canvas.getContext("2d", { willReadFrequently: true });
-    const tongueIn = (face: Array<{ x: number; y: number }>): number => {
-      const box = mouthBox(face);
-      if (!box || !c2d) return 0;
-      const vw = v.videoWidth;
-      const vh = v.videoHeight;
-      c2d.drawImage(v, box.x * vw, box.y * vh, Math.max(1, box.w * vw), Math.max(1, box.h * vh), 0, 0, canvas.width, canvas.height);
-      return tongueFraction(c2d.getImageData(0, 0, canvas.width, canvas.height).data);
-    };
     const v = video.current!;
 
     (async () => {
@@ -194,7 +178,7 @@ function FaceControl({ onClose }: { onClose: () => void }) {
           const face = r.faceLandmarks[0];
           const blend: Blend = {};
           for (const c of r.faceBlendshapes[0]?.categories ?? []) blend[c.categoryName] = c.score;
-          for (const a of tracker.update(face ? headPose(face) : undefined, blend, now, face ? tongueIn(face) : 0)) void run(a);
+          for (const a of tracker.update(face ? headPose(face) : undefined, blend, now)) void run(a);
           if (tracker.ready) setStatus((s) => (s === "learning" ? "ready" : s));
           setPose(tracker.current);
           setProgress(tracker.progress(now));
@@ -222,7 +206,7 @@ function FaceControl({ onClose }: { onClose: () => void }) {
           ? err
           : paused
             ? "Paused"
-            : (toast ?? "Turn head to switch pages · tilt to scroll · wink to allow/deny · 😛 to stop");
+            : (toast ?? "Turn head to switch pages · tilt to scroll · wink to allow/deny · 🤨 to stop");
   return (
     <>
       <video ref={video} muted playsInline className="hidden" />
