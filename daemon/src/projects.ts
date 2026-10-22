@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { K, ProjectConfig, ProjectRequest } from "@wdash/shared";
 import { DAEMON_ROOT, env, loadLocalProjects } from "./config.js";
+import { enableCloud } from "./enableCloud.js";
 import { git } from "./git.js";
 import type { Relay } from "./relay.js";
 
@@ -95,5 +96,11 @@ async function createProject(relay: Relay, req: ProjectRequest): Promise<string>
   writeFileSync(file, `${JSON.stringify([...raw, entry], null, 2)}\n`);
   await relay.publishProjects(loadLocalProjects());
   console.log(`[project ${name}] ready at ${localPath}`);
+  // Best effort: on failure it stays PC-only (run `wdash-daemon enable-cloud <name>` later).
+  try {
+    for (const line of await enableCloud(name, relay)) console.log(`[project ${name}] ${line}`);
+  } catch (e) {
+    console.error(`[project ${name}] cloud setup skipped: ${(e as Error).message}`);
+  }
   return name;
 }

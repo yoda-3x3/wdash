@@ -25,7 +25,7 @@ export async function git(cwd: string, ...args: string[]): Promise<string> {
   }
 }
 
-async function tryGit(cwd: string, ...args: string[]): Promise<string | undefined> {
+export async function tryGit(cwd: string, ...args: string[]): Promise<string | undefined> {
   try {
     return await git(cwd, ...args);
   } catch {
