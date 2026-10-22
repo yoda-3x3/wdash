@@ -3,7 +3,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { decideNext, jobIdFromPath } from "@/lib/decide";
-import { FACE_EMOJI, FACE_LEGEND, FaceTracker, headPose, type Blend, type FacePose } from "@/lib/face";
+import { FACE_EMOJI, FACE_LEGEND, FaceTracker, headPose, mouthBox, tongueFraction, type Blend, type FacePose } from "@/lib/face";
 import type { GestureAction } from "@/lib/gestures";
 import { onListening, sendChat, startDictation, stopDictation } from "@/lib/handsfree";
 import { swipeTo } from "@/lib/swipe";
@@ -31,27 +31,46 @@ export function Face() {
       /* storage blocked */
     }
   }, []);
-  const toggle = () => {
-    const next = !on;
+  const set = useCallback((next: boolean) => {
     setOn(next);
     try {
       localStorage.setItem(PREF, next ? "1" : "0");
     } catch {
       /* ignore */
     }
-  };
+  }, []);
+  const toggle = () => set(!on);
+
+  // Ctrl+G (Cmd+G on Mac) toggles face control. It's "find next" in browsers; wdash takes it over.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        setOn((v) => {
+          try {
+            localStorage.setItem(PREF, v ? "0" : "1");
+          } catch {
+            /* ignore */
+          }
+          return !v;
+        });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   return (
     <>
       <button
         type="button"
         onClick={toggle}
         className={`chip shrink-0 border ${on ? "border-accent bg-accent/15 text-accent" : "border-line text-muted"}`}
-        title={on ? "Turn off face control" : "Control wdash with head turns and expressions (camera stays on this device)"}
+        title={on ? "Turn off face control (Ctrl+G, or stick out your tongue)" : "Control wdash with head turns and expressions (Ctrl+G). Camera stays on this device"}
         aria-pressed={on}
       >
         🙂<span className="hidden sm:inline">{on ? "Face on" : "Face"}</span>
       </button>
-      {on && <FaceControl onClose={toggle} />}
+      {on && <FaceControl onClose={() => set(false)} />}
     </>
   );
 }
@@ -70,6 +89,8 @@ function FaceControl({ onClose }: { onClose: () => void }) {
   const [paused, setPaused] = useState(false);
   const [listening, setListening] = useState(false);
   const pausedRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   const ctx = useRef({ path, refresh, router });
   ctx.current = { path, refresh, router };
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -83,6 +104,7 @@ function FaceControl({ onClose }: { onClose: () => void }) {
 
   const run = useCallback(
     async (a: GestureAction) => {
+      if (a === "turn_off") return onCloseRef.current();
       if (pausedRef.current) return;
       const { path, refresh, router } = ctx.current;
       switch (a) {
@@ -120,6 +142,19 @@ function FaceControl({ onClose }: { onClose: () => void }) {
     let lm: Landmarker | undefined;
     let timer: ReturnType<typeof setTimeout>;
     const tracker = new FaceTracker();
+    const canvas = document.createElement("canvas");
+    canvas.width = 24;
+    canvas.height = 16;
+    const c2d = canvas.getContext("2d", { willReadFrequently: true });
+    const tongueIn = (face: Array<{ x: number; y: number }>): number => {
+      const box = mouthBox(face);
+      if (!box || !c2d) return 0;
+      const vw = v.videoWidth;
+      const vh = v.videoHeight;
+      c2d.drawImage(v, box.x * vw, box.y * vh, Math.max(1, box.w * vw), Math.max(1, box.h * vh), 0, 0, canvas.width, canvas.height);
+      return tongueFraction(c2d.getImageData(0, 0, canvas.width, canvas.height).data);
+    };
+    const v = video.current!;
 
     (async () => {
       try {
@@ -129,7 +164,6 @@ function FaceControl({ onClose }: { onClose: () => void }) {
         return setStatus("error");
       }
       if (stop) return stream.getTracks().forEach((t) => t.stop());
-      const v = video.current!;
       v.srcObject = stream;
       await v.play().catch(() => undefined);
       try {
@@ -160,7 +194,7 @@ function FaceControl({ onClose }: { onClose: () => void }) {
           const face = r.faceLandmarks[0];
           const blend: Blend = {};
           for (const c of r.faceBlendshapes[0]?.categories ?? []) blend[c.categoryName] = c.score;
-          for (const a of tracker.update(face ? headPose(face) : undefined, blend, now)) void run(a);
+          for (const a of tracker.update(face ? headPose(face) : undefined, blend, now, face ? tongueIn(face) : 0)) void run(a);
           if (tracker.ready) setStatus((s) => (s === "learning" ? "ready" : s));
           setPose(tracker.current);
           setProgress(tracker.progress(now));
@@ -188,11 +222,12 @@ function FaceControl({ onClose }: { onClose: () => void }) {
           ? err
           : paused
             ? "Paused"
-            : (toast ?? "Turn head to switch pages · tilt to scroll · wink to allow/deny");
+            : (toast ?? "Turn head to switch pages · tilt to scroll · wink to allow/deny · 😛 to stop");
   return (
     <>
       <video ref={video} muted playsInline className="hidden" />
-      <div className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col items-center gap-2">
+      {/* Bottom-left: the opposite corner from the hand-gesture camera (top-right), above the chat box. */}
+      <div className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] left-4 z-40 flex max-w-[calc(100vw-2rem)] flex-col items-start gap-2">
         {legend && (
           <div className="card space-y-1 p-3 text-xs shadow-lg">
             {FACE_LEGEND.map(([g, what]) => (

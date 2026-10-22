@@ -34,7 +34,8 @@ export type GestureAction =
   | "open_3"
   | "open_4"
   | "open_5"
-  | "toggle_pause";
+  | "toggle_pause"
+  | "turn_off";
 
 type Pt = { x: number; y: number };
 type Category = { categoryName: string; score: number };

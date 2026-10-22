@@ -16,6 +16,7 @@ export type FacePose =
   | "brows"
   | "mouth_open"
   | "smile"
+  | "tongue"
   | "none";
 
 /**
@@ -36,12 +37,46 @@ export function headPose(lm: Pt[]): { yaw: number; pitch: number } | undefined {
   return { yaw: (nose.x - (l.x + r.x) / 2) / width, pitch: (nose.y - eyesY) / span - 0.5 };
 }
 
+/**
+ * MediaPipe has no tongue blendshape, so "tongue out" is read from color: the mouth is a little open and
+ * most pixels between the inner lips are tongue-colored (reddish-pink and lit), unlike a dark mouth or white teeth.
+ */
+export function isTongueColor(r: number, g: number, b: number): boolean {
+  return r > 90 && r > g * 1.35 && r > b * 1.15 && r - g > 35;
+}
+
+/** Fraction of tongue-colored pixels in RGBA data. */
+export function tongueFraction(rgba: ArrayLike<number>): number {
+  let hit = 0;
+  let n = 0;
+  for (let i = 0; i + 3 < rgba.length; i += 4) {
+    n++;
+    if (isTongueColor(rgba[i]!, rgba[i + 1]!, rgba[i + 2]!)) hit++;
+  }
+  return n ? hit / n : 0;
+}
+
+/** Box between the inner lips (normalized image coords), or undefined when the mouth is closed. */
+export function mouthBox(lm: Pt[]): { x: number; y: number; w: number; h: number } | undefined {
+  if (lm.length < 468) return undefined;
+  const top = lm[13]!;
+  const bottom = lm[14]!;
+  const left = lm[78]!;
+  const right = lm[308]!;
+  const w = Math.abs(right.x - left.x);
+  const h = bottom.y - top.y;
+  if (h < w * 0.12) return undefined;
+  // The middle of the opening, extended a little below the lower lip where a stuck-out tongue covers it.
+  return { x: Math.min(left.x, right.x) + w * 0.2, y: top.y + h * 0.15, w: w * 0.6, h: h * 1.1 };
+}
+
 const YAW = 0.11; // ≈ a deliberate head turn
 const PITCH = 0.12;
 const avg = (b: Blend, ...k: string[]) => k.reduce((s, x) => s + (b[x] ?? 0), 0) / k.length;
 
 /** Which face gesture this frame shows, given the person's neutral head pose. Expressions win over head moves. */
-export function classifyFace(pose: { yaw: number; pitch: number }, neutral: { yaw: number; pitch: number }, b: Blend): FacePose {
+export function classifyFace(pose: { yaw: number; pitch: number }, neutral: { yaw: number; pitch: number }, b: Blend, tongue = 0): FacePose {
+  if (tongue > 0.55 && (b.jawOpen ?? 0) < 0.6) return "tongue";
   const l = b.eyeBlinkLeft ?? 0;
   const r = b.eyeBlinkRight ?? 0;
   if (l > 0.6 && r < 0.3) return "wink_left";
@@ -65,6 +100,7 @@ const HOLD_MS: Partial<Record<FacePose, number>> = {
   brows: 500,
   mouth_open: 600,
   smile: 600,
+  tongue: 800,
 };
 const ACTION: Partial<Record<FacePose, GestureAction>> = {
   turn_right: "next_page",
@@ -74,6 +110,7 @@ const ACTION: Partial<Record<FacePose, GestureAction>> = {
   brows: "board",
   mouth_open: "dictate",
   smile: "send",
+  tongue: "turn_off",
 };
 const SCROLL_AFTER_MS = 250;
 
@@ -85,7 +122,8 @@ export class FaceTracker {
   private since = 0;
   private fired = false;
 
-  update(head: { yaw: number; pitch: number } | undefined, blend: Blend, now: number): GestureAction[] {
+  /** `tongue`: tongueFraction of the mouth box this frame (0 when the mouth is closed). */
+  update(head: { yaw: number; pitch: number } | undefined, blend: Blend, now: number, tongue = 0): GestureAction[] {
     if (!head) return this.set("none", now), [];
     // First ~15 frames: learn where "facing the screen" is.
     if (!this.neutral) {
@@ -96,7 +134,7 @@ export class FaceTracker {
         pitch: this.warm.reduce((s, h) => s + h.pitch, 0) / this.warm.length,
       };
     }
-    const pose = classifyFace(head, this.neutral, blend);
+    const pose = classifyFace(head, this.neutral, blend, tongue);
     // Drift slowly toward the current pose while resting, so posture changes don't trigger gestures.
     if (pose === "none") {
       this.neutral.yaw += 0.01 * (head.yaw - this.neutral.yaw);
@@ -144,6 +182,7 @@ export const FACE_EMOJI: Record<FacePose, string> = {
   brows: "🤨",
   mouth_open: "😮",
   smile: "😄",
+  tongue: "😛",
   none: "🙂",
 };
 
@@ -155,4 +194,6 @@ export const FACE_LEGEND: Array<[string, string]> = [
   ["🤨 raise eyebrows", "Go to the Board"],
   ["😮 open mouth", "Dictate into the chat box"],
   ["😄 smile", "Send the message"],
+  ["😛 stick out tongue", "Turn face control off"],
+  ["Ctrl+G", "Turn face control on / off"],
 ];
