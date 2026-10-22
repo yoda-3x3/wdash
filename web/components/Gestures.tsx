@@ -2,9 +2,8 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Attention } from "@wdash/shared";
-import { api } from "@/lib/client";
 import { GestureTracker, LEGEND, MIN_CONFIDENCE, POSE_EMOJI, classify, type GestureAction, type Pose } from "@/lib/gestures";
+import { decideNext } from "@/lib/decide";
 import { swipeTo } from "@/lib/swipe";
 import { useBoard } from "./Shell";
 
@@ -127,20 +126,10 @@ function Camera({ onStatus, onError, onClose }: { onStatus: (s: "loading" | "rea
           return;
         }
         case "approve":
-        case "deny": {
-          const s = await api<{ attention: Attention[] }>("/api/state").catch(() => undefined);
-          const perms = (s?.attention ?? []).filter((x) => x.reason === "permission" && x.ref).sort((x, y) => x.createdAt - y.createdAt);
-          const target = perms.find((x) => x.jobId === jobId) ?? perms[0];
-          if (!target) return say(a === "approve" ? "👍 Nothing waiting for approval" : "👎 Nothing to deny");
-          try {
-            await api(`/api/jobs/${target.jobId}/cmd`, { cmd: { type: "decide", requestId: target.ref, allow: a === "approve", scope: "once" } });
-            say(`${a === "approve" ? "👍 Allowed" : "👎 Denied"}: ${(target.body ?? target.title).slice(0, 60)}`);
-            refresh();
-          } catch (e) {
-            say(`Couldn't ${a}: ${(e as Error).message}`);
-          }
+        case "deny":
+          say(`${a === "approve" ? "👍" : "👎"} ${await decideNext(a === "approve", jobId)}`);
+          refresh();
           return;
-        }
         case "open_1":
         case "open_2":
         case "open_3":

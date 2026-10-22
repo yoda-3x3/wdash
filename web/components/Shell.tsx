@@ -6,6 +6,7 @@ import { createContext, useContext, useEffect, useMemo, useRef } from "react";
 import type { Attention, JobRecord, RateLimitInfo } from "@wdash/shared";
 import { usePoll } from "@/lib/client";
 import { PAGES, slideIn, swipeTo, touchSwipeHandlers } from "@/lib/swipe";
+import { Eyes } from "./Eyes";
 import { Gestures } from "./Gestures";
 import { UpdateBanner } from "./UpdateBanner";
 
@@ -53,6 +54,7 @@ export function Shell({ children, wide = false }: { children: React.ReactNode; w
           </Link>
           <PcDot online={data?.home.online} />
           <Gestures />
+          <Eyes />
           {data?.paused && <span className="chip bg-warn/15 text-warn">paused</span>}
           <nav className="ml-auto flex items-center gap-1 overflow-x-auto text-sm">
             {NAV.map((n) => {
