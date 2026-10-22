@@ -49,6 +49,9 @@ const CANNED: Record<string, Pose> = {
 
 const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
 
+/** How sure the model must be of a gesture (and of seeing a hand at all) to act on it. */
+export const MIN_CONFIDENCE = 0.5;
+
 /**
  * The model only knows "pointing up", so pointing is read from landmarks: index finger extended,
  * middle/ring/pinky curled (tip closer to the wrist than its middle joint), direction from knuckle to tip.
@@ -110,25 +113,25 @@ export function classify(gestures: Category[][], landmarks: Pt[][], opts: { coun
   const point = pointing(lm);
   if (point) return { pose: point, wrist };
   const top = gestures[0]?.[0];
-  if (top && top.score >= 0.6 && CANNED[top.categoryName]) return { pose: CANNED[top.categoryName]!, wrist };
+  if (top && top.score >= MIN_CONFIDENCE && CANNED[top.categoryName]) return { pose: CANNED[top.categoryName]!, wrist };
   return { pose: "none", wrist };
 }
 
 const HOLD_MS: Partial<Record<Pose, number>> = {
-  // Approve/deny act on real requests, so they need a deliberate hold.
-  thumb_up: 900,
-  thumb_down: 900,
-  open_palm: 1200,
-  fist: 600,
-  love: 700,
-  point_left: 500,
-  point_right: 500,
-  count_1: 800,
-  count_2: 800,
-  count_3: 800,
-  count_4: 800,
-  count_5: 800,
-  shaka: 1000,
+  // Approve/deny act on real requests, so they still need the longest hold.
+  thumb_up: 500,
+  thumb_down: 500,
+  open_palm: 700,
+  fist: 350,
+  love: 400,
+  point_left: 300,
+  point_right: 300,
+  count_1: 450,
+  count_2: 450,
+  count_3: 450,
+  count_4: 450,
+  count_5: 450,
+  shaka: 600,
 };
 const POSE_ACTION: Partial<Record<Pose, GestureAction>> = {
   thumb_up: "approve",

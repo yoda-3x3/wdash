@@ -4,7 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Attention } from "@wdash/shared";
 import { api } from "@/lib/client";
-import { GestureTracker, LEGEND, POSE_EMOJI, classify, type GestureAction, type Pose } from "@/lib/gestures";
+import { GestureTracker, LEGEND, MIN_CONFIDENCE, POSE_EMOJI, classify, type GestureAction, type Pose } from "@/lib/gestures";
 import { swipeTo } from "@/lib/swipe";
 import { useBoard } from "./Shell";
 
@@ -236,6 +236,9 @@ function Camera({ onStatus, onError, onClose }: { onStatus: (s: "loading" | "rea
             baseOptions: { modelAssetPath: "/mediapipe/gesture_recognizer.task", delegate },
             runningMode: "VIDEO",
             numHands: 1,
+            minHandDetectionConfidence: MIN_CONFIDENCE,
+            minHandPresenceConfidence: MIN_CONFIDENCE,
+            minTrackingConfidence: MIN_CONFIDENCE,
           });
         recognizer = (await make("GPU").catch(() => make("CPU"))) as unknown as Recognizer;
       } catch (e) {
