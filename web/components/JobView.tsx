@@ -352,6 +352,20 @@ function Timeline({ events, agents }: { events: WdEvent[]; agents: AgentRecord[]
     if (follow) bottom.current?.scrollIntoView({ block: "end" });
   }, [rows.length, follow]);
 
+  // Scrolling up to read pauses follow (so new activity doesn't yank you back down); reaching the bottom resumes it.
+  useEffect(() => {
+    let lastY = window.scrollY;
+    const onScroll = () => {
+      const y = window.scrollY;
+      const atBottom = window.innerHeight + y >= document.documentElement.scrollHeight - 120;
+      if (y < lastY - 4 && !atBottom) setFollow(false);
+      else if (atBottom && y > lastY) setFollow(true);
+      lastY = y;
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-1.5">
