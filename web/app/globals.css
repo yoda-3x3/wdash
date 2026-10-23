@@ -223,3 +223,17 @@ html[data-mood="defcon"] body::before {
     animation: none;
   }
 }
+
+/* Tint the (indigo) logo to the mood's accent. */
+html[data-mood="hacker"] .mood-icon {
+  filter: hue-rotate(-115deg) saturate(1.4) drop-shadow(0 0 4px rgb(57 255 106 / 0.5));
+}
+html[data-mood="defcon"] .mood-icon {
+  filter: hue-rotate(115deg) saturate(1.6) drop-shadow(0 0 5px rgb(255 31 45 / 0.6));
+}
+html[data-mood="cyberpunk"] .mood-icon {
+  filter: hue-rotate(95deg) saturate(1.5) drop-shadow(0 0 5px rgb(255 42 109 / 0.5));
+}
+html[data-mood="amber"] .mood-icon {
+  filter: hue-rotate(160deg) saturate(1.5) drop-shadow(0 0 4px rgb(255 176 0 / 0.5));
+}
