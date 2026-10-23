@@ -116,6 +116,8 @@ export const JobRecord = z.object({
   archived: bool.default(false),
   /** Approve permission requests automatically (hard denies still apply; questions still go to the user). */
   autoMode: bool.default(false),
+  /** A finished job the user reopened with a follow-up message; the runner tells the agents, then clears it. */
+  reopened: bool.default(false),
 });
 export type JobRecord = z.infer<typeof JobRecord>;
 

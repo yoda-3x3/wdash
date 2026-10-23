@@ -253,10 +253,24 @@ export class JobRunner implements AgentHost, TeamApi {
             ? chatPrompt(this.job, this.project, this.scratch)
             : workerPrompt(this.job, this.project, rec);
       const runner = this.makeRunner(rec, cwd, prompt);
-      runner.start(
-        `[wdash] This job was resumed on ${where} from the last checkpoint (${this.job.lastCheckpointSha ?? "start"}). ` +
-          `Your working directory is now ${cwd}. Work after the checkpoint may be lost: check git status/diff, then continue.`,
-      );
+      if (this.job.reopened) {
+        // The job had finished; the user wrote again. Their message arrives next from the command stream.
+        runner.start(
+          rec.role === "chat"
+            ? `[wdash] This chat had ended; the user reopened it with a follow-up (next message). Your earlier changes were already merged.`
+            : `[wdash] This job had finished and its work is merged. The user reopened it with a follow-up (next message). ` +
+                `Answer it; for more changes, spawn new workers (new names) as usual, then job_final_check and job_finish again.`,
+        );
+      } else {
+        runner.start(
+          `[wdash] This job was resumed on ${where} from the last checkpoint (${this.job.lastCheckpointSha ?? "start"}). ` +
+            `Your working directory is now ${cwd}. Work after the checkpoint may be lost: check git status/diff, then continue.`,
+        );
+      }
+    }
+    if (this.job.reopened) {
+      this.job.reopened = false;
+      await this.relay.updateJob(this.jobId, { reopened: false, mergeState: "none" });
     }
     // Approvals from the previous machine can no longer be answered.
     const all = await this.relay.r.hgetall(K.approvals(this.jobId));

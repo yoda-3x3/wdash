@@ -101,6 +101,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       await clear(id, "budget_warning");
       if (job.status === "over_budget") await requeue(job, job.runOn);
       return NextResponse.json({ ok: true });
+    case "user_message":
+      if (job.status === "done" && !job.archived) {
+        // A follow-up on a finished job reopens it: the runner resumes the agents with their memory,
+        // then reads this message from the command stream.
+        await pushCommand(id, cmd);
+        await updateJob(id, { reopened: true });
+        await emit(id, "info", { text: "Reopened with a follow-up message." });
+        await requeue({ ...job, reopened: true }, job.runOn);
+        return NextResponse.json({ ok: true, delivered: "reopened" });
+      }
+      if (terminal) return NextResponse.json({ error: `Job is ${job.status}; nothing is running.` }, { status: 409 });
+      await pushCommand(id, cmd);
+      return NextResponse.json({ ok: true, delivered: "queued" });
     default:
       if (terminal) return NextResponse.json({ error: `Job is ${job.status}; nothing is running.` }, { status: 409 });
       // A runner is starting: it reads commands from its saved cursor, so this is delivered on start.

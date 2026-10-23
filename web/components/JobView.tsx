@@ -87,8 +87,9 @@ export function JobView({ id }: { id: string }) {
           <QuestionCard key={q.requestId} jobId={id} q={q} onDone={refresh} />
         ))}
       {!TERMINAL_STATUSES.includes(job.status) && !archived && <Working agents={agents} events={events} />}
-      {!TERMINAL_STATUSES.includes(job.status) && !archived && (
+      {(!TERMINAL_STATUSES.includes(job.status) || job.status === "done") && !archived && (
         <ChatBox
+          reopen={job.status === "done"}
           jobId={id}
           agents={agents}
           lead={job.kind === "chat" ? CHAT_AGENT : "orchestrator"}
@@ -854,7 +855,7 @@ function JobFiles({ jobId, files }: { jobId: string; files: Attachment[] }) {
   );
 }
 
-function ChatBox({ jobId, agents, lead, asking }: { jobId: string; agents: AgentRecord[]; lead: string; asking: string[] }) {
+function ChatBox({ jobId, agents, lead, asking, reopen = false }: { jobId: string; agents: AgentRecord[]; lead: string; asking: string[]; reopen?: boolean }) {
   const [text, setText] = useState("");
   const [to, setTo] = useState(lead);
   const [busy, setBusy] = useState(false);
@@ -896,7 +897,7 @@ function ChatBox({ jobId, agents, lead, asking }: { jobId: string; agents: Agent
             ))}
           </select>
         )}
-        <input data-chat-input className="input" placeholder={asking.includes(to) ? `Answer ${to}'s question…` : `Message ${to}…`} value={text} onChange={(e) => setText(e.target.value)} />
+        <input data-chat-input className="input" placeholder={reopen ? `Follow up with ${to}… (reopens the job)` : asking.includes(to) ? `Answer ${to}'s question…` : `Message ${to}…`} value={text} onChange={(e) => setText(e.target.value)} />
         <button data-chat-send className="btn btn-primary" disabled={!canSend}>
           Send
         </button>
