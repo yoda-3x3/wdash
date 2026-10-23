@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { MODEL_PRESETS, NO_PROJECT, type ChatModel, type JobKind, type ModelPreset, type ProjectConfig } from "@wdash/shared";
+import { MAX_WORKERS, MODEL_PRESETS, NO_PROJECT, WORKER_CHOICES, type ChatModel, type JobKind, type ModelPreset, type ProjectConfig } from "@wdash/shared";
 import { api, usePoll } from "@/lib/client";
 import { useBoard } from "./Shell";
 import { AttachButton, FileChips, dropProps, useUploads } from "./Attachments";
@@ -188,8 +188,8 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
             <>
               <Field label="Workers">
                 <select className="input" value={workers} onChange={(e) => setWorkers(e.target.value)}>
-                  <option value="auto">Auto (orchestrator decides, 1–4)</option>
-                  {["1", "2", "3", "4"].map((n) => (
+                  <option value="auto">Auto (orchestrator decides, 1–{MAX_WORKERS})</option>
+                  {WORKER_CHOICES.slice(1).map((n) => (
                     <option key={n} value={n}>
                       {n}
                     </option>

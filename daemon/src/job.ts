@@ -5,6 +5,7 @@ import type { Redis } from "ioredis";
 import {
   ATTACHMENTS_DIR,
   CHAT_AGENT,
+  MAX_WORKERS,
   NO_PROJECT,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS,
@@ -681,6 +682,7 @@ export class JobRunner implements AgentHost, TeamApi {
 
   async spawnWorker(w: PlannedWorker): Promise<string> {
     if (this.agents.has(w.name)) throw new Error(`Worker ${w.name} already exists.`);
+    if (this.workers.size >= MAX_WORKERS) throw new Error(`This job already has ${MAX_WORKERS} workers (the cap).`);
     const claims = await this.relay.getClaims(this.jobId);
     if (w.helps) {
       const parent = this.workers.get(w.helps);

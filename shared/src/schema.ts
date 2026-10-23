@@ -82,6 +82,10 @@ export type ChatModel = z.infer<typeof ChatModel>;
 /** Agent id of a chat job's single agent. */
 export const CHAT_AGENT = "claude";
 
+/** Most workers a job can have, helpers included. */
+export const MAX_WORKERS = 15;
+export const WORKER_CHOICES = ["auto", ...Array.from({ length: MAX_WORKERS }, (_, i) => String(i + 1))] as [string, ...string[]];
+
 const num = z.coerce.number();
 const bool = z.preprocess((v) => v === true || v === "true" || v === "1", z.boolean());
 
@@ -96,7 +100,7 @@ export const JobRecord = z.object({
   chatModel: ChatModel.default("sonnet"),
   runOn: RunOn.default("auto"),
   models: ModelPreset.default("sonnet-haiku"),
-  workers: z.string().default("auto"), // "auto" | "1".."4"
+  workers: z.string().default("auto"), // "auto" | "1".."15"
   budgetUsd: num,
   reviewCap: num.default(3),
   costUsd: num.default(0),
@@ -166,7 +170,7 @@ export const NewJobInput = z.object({
   chatModel: ChatModel.default("sonnet"),
   runOn: RunOn.default("auto"),
   models: ModelPreset.default("sonnet-haiku"),
-  workers: z.enum(["auto", "1", "2", "3", "4"]).default("auto"),
+  workers: z.enum(WORKER_CHOICES).default("auto"),
   budgetUsd: z.number().positive().max(500).optional(),
   reviewCap: z.number().int().min(1).max(10).default(3),
   autoMode: z.boolean().default(false),

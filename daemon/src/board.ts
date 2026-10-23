@@ -1,5 +1,6 @@
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { MAX_WORKERS } from "@wdash/shared";
 
 // SPEC.md §6.2 — the shared board, exposed to agents as in-process MCP tools (mcp__wdash__*).
 
@@ -70,8 +71,8 @@ export function orchestratorServer(api: TeamApi, selfId: string): McpSdkServerCo
       shareTool(api, selfId),
       tool(
         "team_plan",
-        "Submit the plan: split the task across 1-4 workers, each owning non-overlapping path globs. Plans with 3+ workers wait for the user's approval; smaller plans start immediately.",
-        { summary: z.string().min(1), workers: z.array(workerShape).min(1).max(4) },
+        `Submit the plan: split the task across 1-${MAX_WORKERS} workers, each owning non-overlapping path globs. Plans with 3+ workers wait for the user's approval; smaller plans start immediately.`,
+        { summary: z.string().min(1), workers: z.array(workerShape).min(1).max(MAX_WORKERS) },
         (a) => wrap(() => api.submitPlan(a.summary, a.workers)),
       ),
       tool("team_spawn_worker", "Add one more worker after the plan has started.", workerShape.shape, (a) => wrap(() => api.spawnWorker(a))),

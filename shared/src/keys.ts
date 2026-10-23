@@ -25,6 +25,8 @@ export const K = {
   sessionSubkeys: (projectKey: string, sessionId: string) => `wd:sesssub:${projectKey}:${sessionId}`, // SET
   homeQueue: "wd:queue:home", // LIST of job ids for the home daemon
   projectQueue: "wd:queue:projects", // LIST of ProjectRequest ids for the home daemon
+  pingQueue: "wd:queue:ping", // LIST of ping ids for the home daemon
+  pong: (id: string) => `wd:pong:${id}`, // STRING EX 60: the daemon's reply JSON
   projectRequest: (id: string) => `wd:projreq:${id}`, // STRING EX 1 day: ProjectRequest JSON
   homeHeartbeat: "wd:daemon:home:heartbeat",
   cloudHeartbeat: (id: string) => `wd:daemon:cloud:${id}:heartbeat`,

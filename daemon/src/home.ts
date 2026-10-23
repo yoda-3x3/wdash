@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import { K, NO_PROJECT, TERMINAL_STATUSES, scratchProject, type ProjectConfig } from "@wdash/shared";
 import { loadLocalProjects } from "./config.js";
 import { pushBase, syncIntoCheckout } from "./git.js";
@@ -77,6 +78,11 @@ export async function runHome(): Promise<void> {
     creating = true;
     try {
       if (await processProjectRequests(relay)) projects = loadLocalProjects();
+      // "Ping PC" from the dashboard: answer with what this daemon is doing.
+      for (let id = await relay.r.lpop(K.pingQueue); id; id = await relay.r.lpop(K.pingQueue)) {
+        const pong = { at: Date.now(), uptimeSec: Math.round(process.uptime()), jobs: running.size, projects: projects.length, host: hostname() };
+        await relay.r.set(K.pong(id), JSON.stringify(pong), "EX", 60);
+      }
     } catch (e) {
       console.error("project requests failed", (e as Error).message);
     } finally {

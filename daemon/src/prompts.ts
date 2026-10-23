@@ -21,7 +21,7 @@ Rules for everyone:
 `;
 
 export function orchestratorPrompt(job: JobRecord, project: ProjectConfig): string {
-  const workers = job.workers === "auto" ? "Choose 1-4 workers. Use fewer for small tasks; 1 is fine." : `Use exactly ${job.workers} worker(s).`;
+  const workers = job.workers === "auto" ? "Choose 1-15 workers. Use as few as the task needs (1 is fine for small tasks); split big tasks wide so they finish fast." : `Use exactly ${job.workers} worker(s).`;
   return `${COMMON}
 # Your role: ORCHESTRATOR (project ${project.name}, repo ${project.repo})
 

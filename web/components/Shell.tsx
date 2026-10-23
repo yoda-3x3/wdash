@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { createContext, useContext, useEffect, useMemo, useRef } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { Attention, JobRecord, RateLimitInfo } from "@wdash/shared";
-import { usePoll } from "@/lib/client";
+import { api, usePoll } from "@/lib/client";
 import { PAGES, slideIn, swipeTo, touchSwipeHandlers } from "@/lib/swipe";
 import { Face } from "./Face";
 import { Gestures } from "./Gestures";
@@ -86,12 +86,51 @@ export function Shell({ children, wide = false }: { children: React.ReactNode; w
   );
 }
 
+type Pong = { at: number; uptimeSec: number; jobs: number; projects: number; host: string };
+
+const ago = (sec: number) => (sec < 120 ? `${sec}s` : sec < 7200 ? `${Math.round(sec / 60)}m` : `${Math.round(sec / 3600)}h`);
+
+/** PC status chip; click it to ping the home daemon and see whether (and how fast) it answers. */
 function PcDot({ online }: { online: boolean | undefined }) {
+  const [ping, setPing] = useState<{ state: "sending" | "ok" | "none"; text: string }>();
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   if (online === undefined) return null;
+
+  async function send() {
+    if (ping?.state === "sending") return;
+    clearTimeout(timer.current);
+    setPing({ state: "sending", text: "pinging…" });
+    const t0 = performance.now();
+    try {
+      const { id } = await api<{ id: string }>("/api/ping", {});
+      // The daemon checks for pings every ~3s; give it 12s.
+      for (let i = 0; i < 24; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        const { pong } = await api<{ pong: Pong | null }>(`/api/ping/${id}`);
+        if (pong) {
+          const secs = ((performance.now() - t0) / 1000).toFixed(1);
+          setPing({ state: "ok", text: `replied in ${secs}s · up ${ago(pong.uptimeSec)} · ${pong.jobs} job${pong.jobs === 1 ? "" : "s"}` });
+          timer.current = setTimeout(() => setPing(undefined), 8000);
+          return;
+        }
+      }
+      setPing({ state: "none", text: "no answer: the daemon isn't running or the PC is asleep" });
+    } catch (e) {
+      setPing({ state: "none", text: (e as Error).message });
+    }
+    timer.current = setTimeout(() => setPing(undefined), 10000);
+  }
+
+  const good = ping ? ping.state !== "none" : online;
   return (
-    <span className={`chip shrink-0 ${online ? "bg-ok/15 text-ok" : "bg-panel-2 text-muted"}`} title={online ? "Home PC online" : "Home PC offline — jobs run in the cloud"}>
-      <span className={`h-1.5 w-1.5 rounded-full ${online ? "bg-ok" : "bg-muted"}`} />
-      <span className="hidden sm:inline">PC {online ? "online" : "offline"}</span>
-    </span>
+    <button
+      type="button"
+      onClick={() => void send()}
+      className={`chip shrink-0 ${good ? "bg-ok/15 text-ok" : ping?.state === "none" ? "bg-bad/15 text-bad" : "bg-panel-2 text-muted"}`}
+      title="Ping your PC"
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${good ? "bg-ok" : ping?.state === "none" ? "bg-bad" : "bg-muted"} ${ping?.state === "sending" ? "animate-ping" : ""}`} />
+      <span className={ping ? "max-w-[55vw] truncate" : "hidden sm:inline"}>{ping ? `PC ${ping.text}` : `PC ${online ? "online" : "offline"}`}</span>
+    </button>
   );
 }
