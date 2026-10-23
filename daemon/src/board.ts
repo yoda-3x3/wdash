@@ -12,6 +12,8 @@ export interface TeamApi {
   // everyone
   post(fromId: string, to: string, text: string): Promise<string>;
   shareFile(fromId: string, path: string, note?: string): Promise<string>;
+  openRepo(fromId: string, repo: string): Promise<string>;
+  pushRepo(fromId: string, repo: string, message: string): Promise<string>;
   // orchestrator
   submitPlan(summary: string, workers: PlannedWorker[]): Promise<string>;
   spawnWorker(w: PlannedWorker): Promise<string>;
@@ -50,6 +52,25 @@ function shareTool(api: TeamApi, selfId: string) {
     },
     (a) => wrap(() => api.shareFile(selfId, a.path, a.note)),
   );
+}
+
+/** Editing a different GitHub repo than the job's project; changes push straight to its default branch. */
+function repoTools(api: TeamApi, selfId: string) {
+  const repo = z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/).describe("GitHub repo as owner/name, e.g. yoda-3x3/day_tradr");
+  return [
+    tool(
+      "open_repo",
+      "Clone another GitHub repo (not this job's project) so you can edit its files. Returns the folder to edit in. Call it again to pull the latest.",
+      { repo },
+      (a) => wrap(() => api.openRepo(selfId, a.repo)),
+    ),
+    tool(
+      "push_repo",
+      "Commit everything you changed in a repo opened with open_repo and push it straight to that repo's default branch.",
+      { repo, message: z.string().min(1).max(300).describe("Commit message") },
+      (a) => wrap(() => api.pushRepo(selfId, a.repo, a.message)),
+    ),
+  ];
 }
 
 const globs = z.array(z.string().min(1)).min(1).describe("Path globs relative to the repo root, posix style, e.g. src/solver/**");
@@ -114,7 +135,7 @@ export function orchestratorServer(api: TeamApi, selfId: string): McpSdkServerCo
 
 /** Chat agents work alone: no board tools, just sharing files. */
 export function chatServer(api: TeamApi, selfId: string): McpSdkServerConfigWithInstance {
-  return createSdkMcpServer({ name: "wdash", version: "0.1.0", tools: [shareTool(api, selfId)] });
+  return createSdkMcpServer({ name: "wdash", version: "0.1.0", tools: [shareTool(api, selfId), ...repoTools(api, selfId)] });
 }
 
 export function workerServer(api: TeamApi, selfId: string): McpSdkServerConfigWithInstance {
@@ -123,6 +144,7 @@ export function workerServer(api: TeamApi, selfId: string): McpSdkServerConfigWi
     version: "0.1.0",
     tools: [
       shareTool(api, selfId),
+      ...repoTools(api, selfId),
       tool(
         "board_post",
         "Send a message to the orchestrator ('orchestrator'), another worker (by name) or 'all'.",

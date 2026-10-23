@@ -64,3 +64,8 @@ test("claim overlap detection", () => {
   assert.deepEqual(conflictingClaims(ctx.claims, ["src/viz/chart.ts"], "w1").length, 1);
   assert.deepEqual(conflictingClaims(ctx.claims, ["docs/**"], "w1"), []);
 });
+
+test("edits inside a repo opened with open_repo are allowed for workers", () => {
+  assert.equal(decide("Edit", { file_path: join(root, ".wdash/repos/me__other/src/a.ts") }, ctx).kind, "allow");
+  assert.equal(decide("Edit", { file_path: join(root, ".wdash/attachments/x.pdf") }, ctx).kind, "deny");
+});

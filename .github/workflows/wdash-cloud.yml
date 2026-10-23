@@ -76,5 +76,7 @@ jobs:
           VAPID_PUBLIC_KEY: ${{ secrets.WDASH_VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.WDASH_VAPID_PRIVATE_KEY }}
           WDASH_WEB_URL: ${{ secrets.WDASH_WEB_URL }}
+          # Lets agents open and push other repos (open_repo / push_repo).
+          WDASH_PROJECTS_TOKEN: ${{ secrets.WDASH_PROJECTS_TOKEN }}
           WDASH_STATE_DIR: ${{ runner.temp }}/wdash
         run: node wdash/daemon/dist/main.js cloud --job "${{ inputs.job_id }}" --repo project

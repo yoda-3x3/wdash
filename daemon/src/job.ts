@@ -31,6 +31,7 @@ import { env } from "./config.js";
 import * as G from "./git.js";
 import { clear, clearJob, raise } from "./notify.js";
 import { conflictingClaims, globsOverlap, inside, type PolicyContext } from "./permissions.js";
+import { openRepo, pushRepo } from "./otherRepos.js";
 import { chatPrompt, orchestratorPrompt, workerPrompt } from "./prompts.js";
 import type { Relay } from "./relay.js";
 
@@ -1062,6 +1063,22 @@ export class JobRunner implements AgentHost, TeamApi {
       writeFileSync(target, data);
     }
     return files.map((f) => f.name);
+  }
+
+  async openRepo(fromId: string, repo: string): Promise<string> {
+    const a = this.agents.get(fromId);
+    if (!a) throw new Error("unknown agent");
+    const dir = await openRepo(a.cwd, repo);
+    await this.relay.emit({ jobId: this.jobId, agentId: fromId, type: "info", payload: { text: `${fromId} opened ${repo}` } });
+    return `${repo} is at ${dir}. Edit files there, then call push_repo to push your changes to its default branch.`;
+  }
+
+  async pushRepo(fromId: string, repo: string, message: string): Promise<string> {
+    const a = this.agents.get(fromId);
+    if (!a) throw new Error("unknown agent");
+    const out = await pushRepo(a.cwd, repo, message);
+    await this.relay.emit({ jobId: this.jobId, agentId: fromId, type: "info", payload: { text: out } });
+    return out;
   }
 
   async shareFile(fromId: string, path: string, note?: string): Promise<string> {

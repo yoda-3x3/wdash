@@ -93,6 +93,8 @@ export function decide(tool: string, input: Record<string, unknown>, ctx: Policy
       };
     }
     if (ownsPath(ctx.owned, rel)) return { kind: "allow" };
+    // Another GitHub repo the agent opened with open_repo: outside the project's ownership rules.
+    if (rel.startsWith(".wdash/repos/")) return { kind: "allow" };
     const owner = ownerOf(ctx.claims, rel);
     return {
       kind: "deny",

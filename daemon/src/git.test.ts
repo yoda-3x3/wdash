@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { branchFor, safeFileName, uniqueFileName } from "@wdash/shared";
 import * as G from "./git.js";
+import { pushRepo, repoDir } from "./otherRepos.js";
 
 async function setup() {
   const root = mkdtempSync(join(tmpdir(), "wdash-git-"));
@@ -123,4 +124,19 @@ test("attachment names are made safe and unique", () => {
   assert.equal(safeFileName("..."), "file");
   assert.equal(uniqueFileName("a.pdf", new Set(["a.pdf", "a (2).pdf"])), "a (3).pdf");
   assert.equal(uniqueFileName("notes", new Set(["notes"])), "notes (2)");
+});
+
+test("push_repo commits an opened repo and pushes to its default branch", async () => {
+  const { root, origin } = await setup();
+  const cwd = join(root, "agent");
+  mkdirSync(cwd, { recursive: true });
+  const dir = repoDir(cwd, "me/other");
+  await G.git(root, "clone", origin, dir);
+  for (const [k, v] of [["user.name", "t"], ["user.email", "t@t"]]) await G.git(dir, "config", k, v);
+  writeFileSync(join(dir, "fix.txt"), "fixed\n");
+  const out = await pushRepo(cwd, "me/other", "fix from another job");
+  assert.match(out, /Pushed 1 commit/);
+  assert.equal(await G.git(dir, "rev-parse", "HEAD"), await G.git(root, "--git-dir", origin, "rev-parse", "main"));
+  assert.match(await pushRepo(cwd, "me/other", "again"), /Nothing new/);
+  await assert.rejects(pushRepo(cwd, "me/missing", "x"), /isn't open/);
 });
