@@ -55,7 +55,8 @@ You are in your own git worktree on branch ${rec.branch}. Other workers edit oth
 `;
 }
 
-export function chatPrompt(job: JobRecord, project: ProjectConfig): string {
+export function chatPrompt(job: JobRecord, project: ProjectConfig, scratch = false): string {
+  if (scratch) return SCRATCH_CHAT;
   return `
 You are Claude, chatting with the user through wdash, a remote dashboard (often from a phone or a school computer where claude.ai is blocked).
 You're working in the git repo of project ${project.name} (${project.repo}), on your own branch ${branchFor.main(job.id)}.
@@ -71,3 +72,16 @@ The user is often NOT watching live; your replies notify them, and they may answ
 - Keep replies concise; end each turn with what you did or what you need.
 `;
 }
+
+const SCRATCH_CHAT = `
+You are Claude, chatting with the user through wdash, a remote dashboard (often from a phone or a school computer where claude.ai is blocked).
+This chat isn't tied to a project: your working directory is an empty scratch folder (no git). Use it for any files you make.
+The user is often NOT watching live; your replies notify them, and they may answer minutes or hours later.
+
+- This is a conversation: answer questions, explain things, write and run code in the scratch folder when it helps.
+- To give the user a file, write it in the folder and call share_file; it shows in the chat as a download. The folder is deleted later, so share anything they should keep.
+- Files the user attaches are in \`.wdash/attachments/\`. Read handles text, PDFs, and images; for other formats (e.g. .docx), extract the text with a shell command.
+- Shell commands need the user's approval unless auto mode is on, which can take a while; batch shell work.
+- Messages starting with [user] come from the user; [wdash] comes from the system.
+- Keep replies concise.
+`;

@@ -82,3 +82,35 @@ export async function enableCloud(name: string, relay?: Relay): Promise<string[]
   log.push(`${name}: cloud enabled`);
   return log;
 }
+
+/**
+ * One-time setup for cloud runs of every project: the Actions secrets wdash-cloud.yml needs, set on the
+ * wdash repo itself. WDASH_PROJECTS_TOKEN (the dispatch token) lets the runner check out and push to projects.
+ */
+export async function setupCloud(): Promise<string[]> {
+  const e = env();
+  const setupFile = join(WDASH_ROOT, ".wdash-setup.json");
+  const setup = existsSync(setupFile) ? (JSON.parse(readFileSync(setupFile, "utf8")) as Record<string, string>) : {};
+  const wdashRepo = ((await tryGit(WDASH_ROOT, "remote", "get-url", "origin")) ?? "").match(/github\.com[/:]([^/]+\/[^/.]+?)(?:\.git)?$/)?.[1];
+  if (!wdashRepo) throw new Error("Couldn't tell which GitHub repo wdash is (git remote origin).");
+  const secrets: Record<string, string | undefined> = {
+    CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN ?? setup.CLAUDE_CODE_OAUTH_TOKEN,
+    WDASH_REDIS_URL: e.WDASH_REDIS_URL,
+    WDASH_VAPID_PUBLIC_KEY: e.VAPID_PUBLIC_KEY,
+    WDASH_VAPID_PRIVATE_KEY: e.VAPID_PRIVATE_KEY,
+    WDASH_WEB_URL: e.WDASH_WEB_URL,
+    WDASH_PROJECTS_TOKEN: setup.GITHUB_DISPATCH_TOKEN,
+  };
+  const log: string[] = [];
+  for (const [k, v] of Object.entries(secrets)) {
+    if (!v) {
+      if (k === "CLAUDE_CODE_OAUTH_TOKEN" || k === "WDASH_REDIS_URL" || k === "WDASH_PROJECTS_TOKEN") throw new Error(`${k} has no value on this PC; run scripts/setup.mjs first.`);
+      log.push(`skipped secret ${k} (no value on this PC)`);
+      continue;
+    }
+    const r = gh(["secret", "set", k, "-R", wdashRepo], v);
+    if (!r.ok) throw new Error(`Couldn't set ${k} on ${wdashRepo}: ${r.err.slice(0, 300)}`);
+  }
+  log.push(`set cloud secrets on ${wdashRepo}; every project can now run in the cloud`);
+  return log;
+}

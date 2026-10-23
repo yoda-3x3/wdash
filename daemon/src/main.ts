@@ -2,7 +2,7 @@
 import { parseArgs } from "node:util";
 import { runCloud } from "./cloud.js";
 import { env, loadLocalProjects } from "./config.js";
-import { enableCloud } from "./enableCloud.js";
+import { enableCloud, setupCloud } from "./enableCloud.js";
 import { runHome } from "./home.js";
 import { Relay } from "./relay.js";
 
@@ -11,7 +11,8 @@ const USAGE = `wdash daemon
   wdash-daemon home                          run on the home PC (picks up jobs, syncs finished work)
   wdash-daemon cloud --job <id> --repo <dir> run one job (GitHub Actions)
   wdash-daemon check                         validate config and relay connectivity
-  wdash-daemon enable-cloud <project>...     let projects run on GitHub Actions (secrets, workflow, cloud: true)
+  wdash-daemon setup-cloud                   set the wdash repo's secrets so any project can run in the cloud
+  wdash-daemon enable-cloud <project>...     (older per-project setup; not needed after setup-cloud)
 `;
 
 async function check(): Promise<number> {
@@ -37,6 +38,10 @@ async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2);
   if (cmd === "home") return runHome();
   if (cmd === "check") process.exit(await check());
+  if (cmd === "setup-cloud") {
+    for (const line of await setupCloud()) console.log(line);
+    process.exit(0);
+  }
   if (cmd === "enable-cloud") {
     if (!rest.length) {
       console.error(USAGE);

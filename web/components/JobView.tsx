@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentRecord, Approval, Attachment, Attention, JobRecord, WdEvent } from "@wdash/shared";
-import { CHAT_AGENT, TERMINAL_STATUSES } from "@wdash/shared";
+import { CHAT_AGENT, NO_PROJECT, TERMINAL_STATUSES, projectLabel } from "@wdash/shared";
 import { api, timeAgo, tokenTitle, tokens, usd, usePoll } from "@/lib/client";
 import { ApproveAll, AttentionCard, Bar, LocationBadge, StatusChip } from "./bits";
 import { AttachButton, FileChips, dropProps, fmtSize, useUploads } from "./Attachments";
@@ -160,7 +160,7 @@ function Header({ job, lease, onChange }: { job: JobRecord; lease: string | null
           ← Board
         </Link>
         <span>·</span>
-        <span className="font-medium text-fg">{job.project}</span>
+        <span className="font-medium text-fg">{projectLabel(job.project)}</span>
         <span>·</span>
         <span>started {timeAgo(job.createdAt)}</span>
         <span className="ml-auto flex gap-1">
@@ -215,9 +215,14 @@ function Header({ job, lease, onChange }: { job: JobRecord; lease: string | null
             <button
               className="btn btn-primary"
               disabled={busy}
-              onClick={() => cmd({ cmd: { type: "finish_chat" } }, "End this chat and merge its changes into your PC's copy?")}
+              onClick={() =>
+                cmd(
+                  { cmd: { type: "finish_chat" } },
+                  job.project === NO_PROJECT ? "End this chat?" : "End this chat and merge its changes into your PC's copy?",
+                )
+              }
             >
-              Finish & merge
+              {job.project === NO_PROJECT ? "End chat" : "Finish & merge"}
             </button>
           )}
           {!terminal && (

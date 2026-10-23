@@ -1,4 +1,4 @@
-import { K, TERMINAL_STATUSES, type JobRecord } from "@wdash/shared";
+import { K, NO_PROJECT, TERMINAL_STATUSES, type JobRecord } from "@wdash/shared";
 import { raise, clear } from "./attention";
 import { dispatchCloudRun } from "./github";
 import { redis } from "./redis";
@@ -22,14 +22,14 @@ export async function placeJob(job: JobRecord, opts: { forceCloud?: boolean } = 
     await emit(job.id, "info", { text: online ? "Queued on your PC." : "Waiting for your PC to come online." });
     return;
   }
-  await dispatch(job, project.repo, project.baseBranch);
+  await dispatch(job, project.name === NO_PROJECT ? "" : project.repo);
 }
 
-async function dispatch(job: JobRecord, repo: string, ref: string, migrating = false): Promise<void> {
+async function dispatch(job: JobRecord, repo: string, migrating = false): Promise<void> {
   await redis().lrem(K.homeQueue, 0, job.id);
   try {
-    // The caller workflow lives on the base branch; the daemon checks out the job branches itself.
-    await dispatchCloudRun(repo, ref, job.id);
+    // Runs wdash-cloud.yml in the wdash repo, which checks out the project; the daemon handles job branches.
+    await dispatchCloudRun(repo, job.id);
     await updateJob(job.id, { location: migrating ? "migrating" : "cloud", dispatchedAt: Date.now() });
     await emit(job.id, "info", { text: migrating ? "PC went offline. Resuming on a cloud runner…" : "Starting a cloud runner…" });
     await clear(job.id, "cloud_dispatch_failed");
@@ -68,7 +68,7 @@ export async function reconcile(force = false): Promise<void> {
         continue;
       }
       await raise("pc_offline", { jobId: job.id, detail: `Resuming from checkpoint ${job.lastCheckpointSha?.slice(0, 8) ?? "(start)"} on a cloud runner.` });
-      await dispatch(job, project.repo, project.baseBranch, true);
+      await dispatch(job, project.name === NO_PROJECT ? "" : project.repo, true);
       continue;
     }
 
@@ -76,7 +76,7 @@ export async function reconcile(force = false): Promise<void> {
       // Queued for the PC but nobody picked it up.
       if (online || job.runOn === "home" || !project.cloud) continue;
       if (now - job.updatedAt < HOME_PICKUP_GRACE_MS) continue;
-      await dispatch(job, project.repo, project.baseBranch);
+      await dispatch(job, project.name === NO_PROJECT ? "" : project.repo);
       continue;
     }
 
@@ -87,7 +87,7 @@ export async function reconcile(force = false): Promise<void> {
       await updateJob(job.id, { location: "queued" });
       await raise("cloud_dispatch_failed", {
         jobId: job.id,
-        detail: job.cloudRunUrl ? `The cloud runner stopped unexpectedly. Logs: ${job.cloudRunUrl}` : "The cloud runner never started (check the repo's Actions tab and secrets).",
+        detail: job.cloudRunUrl ? `The cloud runner stopped unexpectedly. Logs: ${job.cloudRunUrl}` : "The cloud runner never started (check the wdash repo's Actions tab and secrets).",
       });
     }
   }

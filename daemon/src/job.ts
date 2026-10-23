@@ -5,6 +5,7 @@ import type { Redis } from "ioredis";
 import {
   ATTACHMENTS_DIR,
   CHAT_AGENT,
+  NO_PROJECT,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS,
   safeFileName,
@@ -134,7 +135,18 @@ export class JobRunner implements AgentHost, TeamApi {
     return outcome;
   }
 
+  /** A chat without a project: an empty folder, no git (no branches, checkpoints, or merging). */
+  private get scratch(): boolean {
+    return this.project.name === NO_PROJECT;
+  }
+
   private async prepareMain(): Promise<void> {
+    if (this.scratch) {
+      this.mainWt = join(env().WDASH_STATE_DIR, "scratch", this.jobId);
+      mkdirSync(this.mainWt, { recursive: true });
+      await this.syncAttachments(this.mainWt);
+      return;
+    }
     if (this.mode === "cloud") await G.fetchAll(this.repoDir);
     const base = await G.baseRef(this.repoDir, this.project.baseBranch, this.mode);
     this.mainWt = await G.addWorktree(this.repoDir, this.wtPath("main"), branchFor.main(this.jobId), base);
@@ -184,7 +196,7 @@ export class JobRunner implements AgentHost, TeamApi {
       branch: branchFor.main(this.jobId),
     };
     await this.relay.setClaims(this.jobId, CHAT_AGENT, ["**"]);
-    const runner = this.makeRunner(rec, this.mainWt, chatPrompt(this.job, this.project));
+    const runner = this.makeRunner(rec, this.mainWt, chatPrompt(this.job, this.project, this.scratch));
     await runner.save();
     const files = (await this.relay.listFiles(this.jobId)).map((f) => f.name);
     const attached = files.length ? `\n\n[wdash] The user attached: ${files.join(", ")} (in ${ATTACHMENTS_DIR}/).` : "";
@@ -196,6 +208,7 @@ export class JobRunner implements AgentHost, TeamApi {
     if (this.job.kind !== "chat" || this.finishing) return;
     this.finishing = true;
     await this.agents.get(CHAT_AGENT)?.stop("done");
+    if (this.scratch) return this.complete("Chat finished.");
     await G.checkpointCommit(this.mainWt, "wdash: chat changes");
     const base = await G.baseRef(this.repoDir, this.project.baseBranch, this.mode);
     const d = await G.diffAgainst(this.mainWt, base);
@@ -226,7 +239,11 @@ export class JobRunner implements AgentHost, TeamApi {
         this.workers.set(rec.id, { rounds: rec.reviewRounds, failedChecks: 0, approved: false, idleNudges: 0 });
       }
       const prompt =
-        rec.role === "orchestrator" ? orchestratorPrompt(this.job, this.project) : rec.role === "chat" ? chatPrompt(this.job, this.project) : workerPrompt(this.job, this.project, rec);
+        rec.role === "orchestrator"
+          ? orchestratorPrompt(this.job, this.project)
+          : rec.role === "chat"
+            ? chatPrompt(this.job, this.project, this.scratch)
+            : workerPrompt(this.job, this.project, rec);
       const runner = this.makeRunner(rec, cwd, prompt);
       runner.start(
         `[wdash] This job was resumed on ${where} from the last checkpoint (${this.job.lastCheckpointSha ?? "start"}). ` +
@@ -817,7 +834,9 @@ export class JobRunner implements AgentHost, TeamApi {
     await this.checkpoint("final");
     let mergeState: JobRecord["mergeState"] = "pending";
     let detail = summary;
-    if (this.mode === "home" && this.project.localPath) {
+    if (this.scratch) {
+      mergeState = "none";
+    } else if (this.mode === "home" && this.project.localPath) {
       const out = await G.syncIntoCheckout(this.project.localPath, this.project.baseBranch, this.jobId);
       if (out.kind === "merged") {
         mergeState = "merged";
@@ -921,6 +940,7 @@ export class JobRunner implements AgentHost, TeamApi {
   /** Commit WIP everywhere and push all job branches so another machine can take over (SPEC.md §10). */
   private async checkpoint(why: string): Promise<void> {
     this.lastCheckpointAt = Date.now();
+    if (this.scratch) return; // nothing to save in git
     const branches = [branchFor.main(this.jobId)];
     for (const a of this.agents.values()) {
       // A chat agent edits the job branch itself, so its work is checkpointed there.

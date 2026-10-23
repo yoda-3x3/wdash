@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentRecord, Attention, AttentionAction, JobRecord, WdEvent } from "@wdash/shared";
+import { projectLabel } from "@wdash/shared";
 import { api, usd } from "@/lib/client";
 import { useBoard } from "./Shell";
 
@@ -239,7 +240,7 @@ function Tile({
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[agent.status] ?? "bg-[#7d8590]"}`} />
         <span className={agent.role === "orchestrator" ? "text-[#c4b5fd]" : "text-[#67e8f9]"}>{agent.id}</span>
         <span className="truncate text-[#7d8590]">
-          {job.project} · {job.title}
+          {projectLabel(job.project)} · {job.title}
         </span>
         <span className="ml-auto shrink-0 text-[#7d8590]">
           {agent.model} {usd(agent.costUsd)}

@@ -73,9 +73,13 @@ export function NewProject() {
           {req.status === "failed" && <p className="text-bad">Couldn't create it: {req.error}</p>}
           {req.status === "done" && (
             <>
-              <p className="text-ok">✓ Created a private repo and cloned it on your PC. It's ready to use.</p>
+              <p className="text-ok">
+                ✓ {req.repo ? `Created ${req.repo} on GitHub. It's ready to use.` : "Created a private repo and cloned it on your PC. It's ready to use."}
+              </p>
               <p className="text-xs text-muted">
-                It runs on your PC only. For cloud runs, add the repo to your GitHub token, add the wdash workflow, and re-run setup (see the README).
+                {req.repo
+                  ? "Jobs can run in the cloud right away; your PC clones it next time it's on, so PC runs work after that."
+                  : "It runs on your PC and in the cloud."}
               </p>
               <div className="flex gap-2 pt-1">
                 <Link href="/chat/new" className="btn btn-primary">
@@ -102,7 +106,7 @@ export function NewProject() {
     <form onSubmit={submit} className="mx-auto max-w-2xl space-y-4">
       <h1 className="text-lg font-semibold">New project</h1>
       <p className="text-xs text-muted">
-        Your PC creates a private GitHub repo with your GitHub CLI, clones it next to wdash, and adds it to your projects.
+        Creates a private GitHub repo and adds it to your projects. It works even with your PC off; the PC clones it when it's back.
       </p>
       <Field label="Name">
         <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. robot-arm" pattern="[A-Za-z0-9._\-]+" required autoFocus />

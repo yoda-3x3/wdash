@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { MODEL_PRESETS, type ChatModel, type JobKind, type ModelPreset, type ProjectConfig } from "@wdash/shared";
+import { MODEL_PRESETS, NO_PROJECT, type ChatModel, type JobKind, type ModelPreset, type ProjectConfig } from "@wdash/shared";
 import { api, usePoll } from "@/lib/client";
 import { useBoard } from "./Shell";
 import { AttachButton, FileChips, dropProps, useUploads } from "./Attachments";
@@ -44,7 +44,11 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
   const files = useUploads("/api/uploads");
 
   useEffect(() => {
-    if (project || !projects.length) return;
+    if (project) return;
+    if (!projects.length) {
+      if (chat && data) setProject(NO_PROJECT);
+      return;
+    }
     let last: string | null = null;
     try {
       last = localStorage.getItem(LAST_PROJECT);
@@ -52,7 +56,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
       /* storage blocked */
     }
     setProject(projects.find((p) => p.name === last)?.name ?? projects[0]!.name);
-  }, [projects, project]);
+  }, [projects, project, chat, data]);
 
   const selected = projects.find((p) => p.name === project);
   const online = state?.home.online;
@@ -90,7 +94,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
     }
   }
 
-  if (data && !projects.length) {
+  if (data && !projects.length && !chat) {
     return (
       <div className="card p-6 text-sm">
         <h1 className="mb-2 text-lg font-semibold">No projects yet</h1>
@@ -127,6 +131,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
           </Link>
         </span>
         <select className="input" value={project} onChange={(e) => setProject(e.target.value)} required>
+          {chat && <option value={NO_PROJECT}>No project (just chat)</option>}
           {projects.map((p) => (
             <option key={p.name} value={p.name}>
               {p.name} — {p.repo}

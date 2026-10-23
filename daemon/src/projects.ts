@@ -4,7 +4,6 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { K, ProjectConfig, ProjectRequest } from "@wdash/shared";
 import { DAEMON_ROOT, env, loadLocalProjects } from "./config.js";
-import { enableCloud } from "./enableCloud.js";
 import { git } from "./git.js";
 import type { Relay } from "./relay.js";
 
@@ -57,50 +56,50 @@ export async function processProjectRequests(relay: Relay): Promise<number> {
   }
 }
 
-/** Creates a private GitHub repo with gh, clones it next to wdash, and adds it to projects.json. */
+/**
+ * New project: create a private GitHub repo with gh (unless the website already created it, in which case
+ * req.repo is set), clone it next to wdash, and add it to projects.json. Cloud runs need nothing per project:
+ * wdash-cloud.yml in the wdash repo checks the project out.
+ */
 async function createProject(relay: Relay, req: ProjectRequest): Promise<string> {
   const { name, description, testCommand, buildCommand } = req.input;
   const file = env().WDASH_PROJECTS_FILE;
-  const current = loadLocalProjects();
-  if (current.some((p) => p.name.toLowerCase() === name.toLowerCase())) throw new Error(`A project named ${name} already exists.`);
+  if (loadLocalProjects().some((p) => p.name.toLowerCase() === name.toLowerCase())) {
+    if (req.repo) return name; // already adopted
+    throw new Error(`A project named ${name} already exists.`);
+  }
   const localPath = join(projectsRoot(), name);
-  if (existsSync(localPath)) throw new Error(`${localPath} already exists on the PC.`);
 
-  const owner = await gh("api", "user", "-q", ".login");
-  const repo = `${owner}/${name}`;
-  const exists = await gh("repo", "view", repo, "--json", "name").then(
-    () => true,
-    () => false,
-  );
-  if (exists) throw new Error(`GitHub repo ${repo} already exists.`);
-
-  console.log(`[project ${name}] creating ${repo}`);
-  await gh("repo", "create", repo, "--private", "--add-readme", "--clone", ...(description ? ["--description", description] : []));
-  if (!existsSync(join(localPath, ".git"))) throw new Error(`gh created ${repo} but didn't clone it to ${localPath}.`);
+  let repo = req.repo;
+  if (repo) {
+    // The website created it: just clone it here.
+    if (!existsSync(join(localPath, ".git"))) {
+      if (existsSync(localPath)) throw new Error(`${localPath} already exists on the PC.`);
+      console.log(`[project ${name}] cloning ${repo}`);
+      await gh("repo", "clone", repo, localPath);
+    }
+  } else {
+    if (existsSync(localPath)) throw new Error(`${localPath} already exists on the PC.`);
+    const owner = await gh("api", "user", "-q", ".login");
+    repo = `${owner}/${name}`;
+    const exists = await gh("repo", "view", repo, "--json", "name").then(
+      () => true,
+      () => false,
+    );
+    if (exists) throw new Error(`GitHub repo ${repo} already exists.`);
+    console.log(`[project ${name}] creating ${repo}`);
+    await gh("repo", "create", repo, "--private", "--add-readme", "--clone", ...(description ? ["--description", description] : []));
+  }
+  if (!existsSync(join(localPath, ".git"))) throw new Error(`${repo} isn't cloned at ${localPath}.`);
   const baseBranch = (await git(localPath, "symbolic-ref", "--short", "HEAD").catch(() => "main")) || "main";
 
   const commands: ProjectConfig["commands"] = {};
   if (testCommand?.trim()) commands.test = testCommand.trim();
   if (buildCommand?.trim()) commands.build = buildCommand.trim();
-  const entry = ProjectConfig.parse({
-    name,
-    repo,
-    baseBranch,
-    localPath,
-    commands,
-    defaultBudgetUsd: 2,
-    // Cloud runs need the repo added to the dispatch token, the caller workflow, and Actions secrets.
-    cloud: false,
-  });
+  const entry = ProjectConfig.parse({ name, repo, baseBranch, localPath, commands, defaultBudgetUsd: 2, cloud: true });
   const raw = existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as unknown[]) : [];
   writeFileSync(file, `${JSON.stringify([...raw, entry], null, 2)}\n`);
   await relay.publishProjects(loadLocalProjects());
   console.log(`[project ${name}] ready at ${localPath}`);
-  // Best effort: on failure it stays PC-only (run `wdash-daemon enable-cloud <name>` later).
-  try {
-    for (const line of await enableCloud(name, relay)) console.log(`[project ${name}] ${line}`);
-  } catch (e) {
-    console.error(`[project ${name}] cloud setup skipped: ${(e as Error).message}`);
-  }
   return name;
 }

@@ -1,4 +1,4 @@
-import { K, TERMINAL_STATUSES, type ProjectConfig } from "@wdash/shared";
+import { K, NO_PROJECT, TERMINAL_STATUSES, scratchProject, type ProjectConfig } from "@wdash/shared";
 import { loadLocalProjects } from "./config.js";
 import { pushBase, syncIntoCheckout } from "./git.js";
 import { JobRunner } from "./job.js";
@@ -35,13 +35,14 @@ export async function runHome(): Promise<void> {
     const job = await relay.getJob(jobId);
     if (!job || TERMINAL_STATUSES.includes(job.status)) return;
     projects = loadLocalProjects();
-    const project = projects.find((p) => p.name === job.project);
-    if (!project?.localPath) {
+    // A chat without a project runs in a scratch folder, not a checkout.
+    const project = job.project === NO_PROJECT ? scratchProject() : projects.find((p) => p.name === job.project);
+    if (!project || (job.project !== NO_PROJECT && !project.localPath)) {
       await relay.setStatus(jobId, "failed", { error: `Project '${job.project}' isn't in the home daemon's allowlist.` });
       await raise(relay, "job_failed", { jobId, detail: `Project '${job.project}' isn't allowlisted on the PC.` });
       return;
     }
-    const runner = new JobRunner(relay, jobId, project, "home", project.localPath, HOLDER);
+    const runner = new JobRunner(relay, jobId, project, "home", project.localPath ?? "", HOLDER);
     console.log(`[${jobId}] starting on home PC`);
     const p = runner
       .run()

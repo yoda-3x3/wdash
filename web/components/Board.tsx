@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { TERMINAL_STATUSES, type JobRecord } from "@wdash/shared";
+import { TERMINAL_STATUSES, projectLabel, type JobRecord } from "@wdash/shared";
 import { api, timeAgo, tokenTitle, tokens, usd } from "@/lib/client";
 import { ApproveAll, AttentionCard, Bar, LocationBadge, StatusChip } from "./bits";
 import { useBoard } from "./Shell";
@@ -80,7 +80,7 @@ function JobCard({ job, waiting, now }: { job: JobRecord; waiting: number; now: 
   return (
     <Link href={`/jobs/${job.id}`} className={`card block p-3 transition hover:border-accent/60 ${waiting ? "border-warn/50" : ""}`}>
       <div className="flex items-center gap-2 text-xs text-muted">
-        <span className="font-medium text-fg">{job.project}</span>
+        <span className="font-medium text-fg">{projectLabel(job.project)}</span>
         {job.kind === "chat" && <span className="chip bg-info/15 text-info">chat</span>}
         {job.autoMode && <span className="chip bg-warn/15 text-warn">⚡ auto</span>}
         <span>·</span>

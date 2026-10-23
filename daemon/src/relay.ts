@@ -11,6 +11,8 @@ import {
   Attachment,
   Command,
   ProjectConfig,
+  NO_PROJECT,
+  scratchProject,
   type WdEvent,
   type JobStatus,
 } from "@wdash/shared";
@@ -172,8 +174,8 @@ export class Relay {
   // ----- misc -----
 
   async publishProjects(projects: ProjectConfig[]): Promise<void> {
+    // No wipe first: projects the website created (not cloned here yet) must stay listed.
     const p = this.r.pipeline();
-    p.del(K.projects);
     for (const pr of projects) {
       // localPath stays on the PC.
       const { localPath: _omit, ...pub } = pr;
@@ -205,6 +207,7 @@ export class Relay {
   }
 
   async getProject(name: string): Promise<ProjectConfig | undefined> {
+    if (name === NO_PROJECT) return scratchProject();
     const v = await this.r.hget(K.projects, name);
     return v ? ProjectConfig.parse(JSON.parse(v)) : undefined;
   }

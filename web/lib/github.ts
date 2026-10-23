@@ -25,15 +25,33 @@ async function gh(path: string, init: RequestInit = {}, repo?: string): Promise<
 }
 
 /** Start the project's wdash.yml caller workflow for one job (SPEC.md §3). */
-export async function dispatchCloudRun(repo: string, ref: string, jobId: string): Promise<void> {
-  const res = await gh(`/repos/${repo}/actions/workflows/wdash.yml/dispatches`, {
+/**
+ * Start wdash-cloud.yml in the wdash repo for one job. It checks out the project repo itself, so projects
+ * need no workflow or secrets of their own. `projectRepo` is empty for a chat without a project.
+ */
+export async function dispatchCloudRun(projectRepo: string, jobId: string): Promise<void> {
+  const wdash = archiveRepo();
+  const res = await gh(`/repos/${wdash}/actions/workflows/wdash-cloud.yml/dispatches`, {
     method: "POST",
-    body: JSON.stringify({ ref, inputs: { job_id: jobId } }),
-  }, repo);
+    body: JSON.stringify({ ref: "main", inputs: { job_id: jobId, repo: projectRepo } }),
+  });
   if (res.status !== 204) {
     const body = await res.text();
     throw new Error(`GitHub dispatch failed (${res.status}): ${body.slice(0, 300)}`);
   }
+}
+
+/**
+ * Create a private repo for the token's account (needs the token's "Administration: write" permission).
+ * Returns undefined when the token isn't allowed to, so the caller can fall back to the PC.
+ */
+export async function createRepo(name: string, description?: string): Promise<{ repo: string; baseBranch: string } | undefined> {
+  const res = await gh(`/user/repos`, { method: "POST", body: JSON.stringify({ name, description, private: true, auto_init: true }) });
+  if (res.status === 403 || res.status === 401) return undefined;
+  const body = (await res.json().catch(() => ({}))) as { full_name?: string; default_branch?: string; message?: string; errors?: Array<{ message?: string }> };
+  if (res.status === 422) throw new Error(body.errors?.[0]?.message ?? `A repo named ${name} already exists on GitHub.`);
+  if (!res.ok || !body.full_name) throw new Error(`GitHub couldn't create the repo (${res.status}): ${body.message ?? ""}`);
+  return { repo: body.full_name, baseBranch: body.default_branch ?? "main" };
 }
 
 export async function deleteBranch(repo: string, branch: string): Promise<void> {

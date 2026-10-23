@@ -8,6 +8,8 @@ import {
   JobRecord,
   ProjectConfig,
   ProjectRequest,
+  NO_PROJECT,
+  scratchProject,
   type NewProjectInput,
   RateLimitInfo,
   WdEvent,
@@ -64,6 +66,7 @@ export async function getProjects(): Promise<ProjectConfig[]> {
 }
 
 export async function getProject(name: string): Promise<ProjectConfig | undefined> {
+  if (name === NO_PROJECT) return scratchProject();
   const v = await redis().hget<string>(K.projects, name);
   return v ? ProjectConfig.parse(JSON.parse(v)) : undefined;
 }
@@ -251,9 +254,10 @@ export async function getFileData(jobId: string, fileId: string): Promise<Buffer
 // ---------------------------------------------------------------- new projects
 
 /** Queues a "create project" request for the home daemon, which does the GitHub side with gh. */
-export async function createProjectRequest(input: NewProjectInput): Promise<ProjectRequest> {
+/** `repo` set: the website already created it on GitHub; the PC only clones and registers it. */
+export async function createProjectRequest(input: NewProjectInput, repo?: string): Promise<ProjectRequest> {
   const now = Date.now();
-  const req: ProjectRequest = { id: newId("p"), input, status: "pending", createdAt: now, updatedAt: now };
+  const req: ProjectRequest = { id: newId("p"), input, status: "pending", createdAt: now, updatedAt: now, ...(repo ? { repo } : {}) };
   const r = redis();
   await r.set(K.projectRequest(req.id), JSON.stringify(req), { ex: 24 * 60 * 60 });
   await r.rpush(K.projectQueue, req.id);

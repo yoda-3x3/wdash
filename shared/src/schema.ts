@@ -25,6 +25,17 @@ export const ProjectConfig = z.object({
 });
 export type ProjectConfig = z.infer<typeof ProjectConfig>;
 
+/** Project name for chats that aren't tied to a repo: the agent works in an empty scratch folder. */
+export const NO_PROJECT = "_scratch";
+
+export function scratchProject(): ProjectConfig {
+  return ProjectConfig.parse({ name: NO_PROJECT, repo: "none/none", baseBranch: "main", commands: {}, defaultBudgetUsd: 2, cloud: true, pushOnMerge: false });
+}
+
+export function projectLabel(name: string): string {
+  return name === NO_PROJECT ? "no project" : name;
+}
+
 // ---------- Jobs ----------
 
 export const JobStatus = z.enum([
@@ -277,7 +288,8 @@ export const NewProjectInput = z.object({
     .min(1)
     .max(80)
     .regex(/^[A-Za-z0-9._-]+$/, "Use letters, digits, '.', '_' or '-'")
-    .refine((n) => !n.startsWith("."), "Can't start with '.'"),
+    .refine((n) => !n.startsWith("."), "Can't start with '.'")
+    .refine((n) => n !== NO_PROJECT, "That name is reserved"),
   description: z.string().max(300).optional(),
   testCommand: z.string().max(300).optional(),
   buildCommand: z.string().max(300).optional(),
@@ -290,6 +302,8 @@ export const ProjectRequest = z.object({
   status: z.enum(["pending", "creating", "done", "failed"]),
   error: z.string().optional(),
   project: z.string().optional(),
+  /** Set when the website already created the GitHub repo; the PC only clones and registers it. */
+  repo: z.string().optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
 });
