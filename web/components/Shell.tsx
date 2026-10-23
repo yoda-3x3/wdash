@@ -50,7 +50,7 @@ export function Shell({ children, wide = false }: { children: React.ReactNode; w
         <div className={`mx-auto flex items-center gap-3 px-4 py-2.5 ${wide ? "" : "max-w-5xl"}`}>
           <Link href="/" className="flex items-center gap-2 font-semibold">
             <img src="/icon.svg" alt="" className="h-6 w-6" />
-            <span className="hidden sm:inline">wdash</span>
+            <span className="mood-prompt hidden sm:inline">wdash</span>
           </Link>
           <PcDot online={data?.home.online} />
           <Gestures />

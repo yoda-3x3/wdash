@@ -1,5 +1,6 @@
 "use client";
 
+import { MoodPicker } from "./MoodPicker";
 import { signOut } from "next-auth/react";
 import { useEffect, useState } from "react";
 import type { ProjectConfig } from "@wdash/shared";
@@ -58,6 +59,12 @@ export function Settings({ login, vapidKey }: { login: string; vapidKey: string 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
       <h1 className="text-lg font-semibold">Settings</h1>
+
+      <section className="card space-y-3 p-4">
+        <h2 className="font-medium">Mood</h2>
+        <MoodPicker />
+        <p className="text-xs text-muted">Saved on this device.</p>
+      </section>
 
       <section className="card space-y-2 p-4">
         <h2 className="font-medium">Notifications on this device</h2>

@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { MOOD_BOOT } from "@/lib/mood";
 
 export const metadata: Metadata = {
   title: "wdash",
@@ -21,7 +22,11 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    // data-mood is set by the boot script before hydration, so React shouldn't complain about it.
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: MOOD_BOOT }} />
+      </head>
       <body className="min-h-dvh font-sans antialiased">{children}</body>
     </html>
   );

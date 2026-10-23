@@ -82,3 +82,144 @@ body {
 pre.code {
   @apply overflow-x-auto rounded-lg bg-panel-2 p-3 font-mono text-xs leading-relaxed;
 }
+
+/* ---------------------------------------------------------------- moods
+   <html data-mood="…"> (set before paint by app/layout.tsx, picked in Settings). No attribute = Classic,
+   which follows the system light/dark setting. */
+
+html[data-mood="hacker"] {
+  --bg: #050805;
+  --panel: #0a120a;
+  --panel-2: #0f1a0f;
+  --line: #1d3a1d;
+  --fg: #b7f7b7;
+  --muted: #5fae6a;
+  --accent: #39ff6a;
+  --accent-fg: #021003;
+  --ok: #39ff6a;
+  --warn: #e6ff4d;
+  --bad: #ff4d6d;
+  --info: #4dd8ff;
+  --glow: 0 0 6px rgb(57 255 106 / 0.55);
+  color-scheme: dark;
+}
+html[data-mood="defcon"] {
+  --bg: #0a0000;
+  --panel: #140304;
+  --panel-2: #1f0507;
+  --line: #4a0d12;
+  --fg: #ffd6d6;
+  --muted: #c2585e;
+  --accent: #ff1f2d;
+  --accent-fg: #0a0000;
+  --ok: #ff8a8a;
+  --warn: #ffb020;
+  --bad: #ff1f2d;
+  --info: #ff6b6b;
+  --glow: 0 0 7px rgb(255 31 45 / 0.6);
+  color-scheme: dark;
+}
+html[data-mood="cyberpunk"] {
+  --bg: #0d0221;
+  --panel: #160530;
+  --panel-2: #200a40;
+  --line: #3b1466;
+  --fg: #f5e6ff;
+  --muted: #a98bd1;
+  --accent: #ff2a6d;
+  --accent-fg: #0d0221;
+  --ok: #05ffa1;
+  --warn: #f9f871;
+  --bad: #ff2a6d;
+  --info: #01cdfe;
+  --glow: 0 0 8px rgb(1 205 254 / 0.5);
+  color-scheme: dark;
+}
+html[data-mood="amber"] {
+  --bg: #0b0700;
+  --panel: #140d02;
+  --panel-2: #1d1404;
+  --line: #3a2808;
+  --fg: #ffcc66;
+  --muted: #b38636;
+  --accent: #ffb000;
+  --accent-fg: #120b00;
+  --ok: #ffd166;
+  --warn: #ff9f1c;
+  --bad: #ff5e3a;
+  --info: #ffcf70;
+  --glow: 0 0 6px rgb(255 176 0 / 0.5);
+  color-scheme: dark;
+}
+html[data-mood="midnight"] {
+  --bg: #0b1020;
+  --panel: #121a30;
+  --panel-2: #18223d;
+  --line: #26335a;
+  --fg: #dbe4ff;
+  --muted: #8d9bc4;
+  --accent: #7aa2ff;
+  --accent-fg: #0b1020;
+  --ok: #5eead4;
+  --warn: #fcd34d;
+  --bad: #fb7185;
+  --info: #93c5fd;
+  color-scheme: dark;
+}
+
+/* Terminal moods: monospace everywhere, glowing accents, a blinking prompt on the logo. */
+html:is([data-mood="hacker"], [data-mood="defcon"], [data-mood="amber"]) body {
+  font-family: var(--font-mono);
+  letter-spacing: -0.01em;
+}
+html:is([data-mood="hacker"], [data-mood="defcon"], [data-mood="amber"], [data-mood="cyberpunk"]) :is(h1, .text-accent, .btn-primary) {
+  text-shadow: var(--glow);
+}
+html:is([data-mood="hacker"], [data-mood="defcon"], [data-mood="amber"]) .mood-prompt::before {
+  content: "> ";
+  color: var(--accent);
+}
+html:is([data-mood="hacker"], [data-mood="defcon"], [data-mood="amber"]) .mood-prompt::after {
+  content: "▍";
+  margin-left: 1px;
+  color: var(--accent);
+  animation: mood-blink 1.1s steps(1) infinite;
+}
+@keyframes mood-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* CRT scanlines (purely visual; clicks pass through). */
+html:is([data-mood="hacker"], [data-mood="defcon"], [data-mood="amber"]) body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  background: repeating-linear-gradient(to bottom, rgb(0 0 0 / 0) 0 2px, rgb(0 0 0 / 0.18) 2px 3px);
+}
+
+/* DEFCON: a slow red-alert pulse around the screen edge. */
+html[data-mood="defcon"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 59;
+  pointer-events: none;
+  box-shadow: inset 0 0 60px 6px rgb(255 31 45 / 0.35);
+  animation: defcon-pulse 2.4s ease-in-out infinite;
+}
+@keyframes defcon-pulse {
+  50% {
+    box-shadow: inset 0 0 90px 14px rgb(255 31 45 / 0.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html .mood-prompt::after,
+  html[data-mood="defcon"] body::before {
+    animation: none;
+  }
+}
