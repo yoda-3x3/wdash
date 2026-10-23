@@ -4,17 +4,14 @@
 
 /** Main pages, in nav order. Swiping left goes to the next one, right to the previous; it wraps. */
 export const PAGES = [
-  { href: "/", label: "Board" },
-  { href: "/wall", label: "Wall" },
-  { href: "/new", label: "New job" },
-  { href: "/chat/new", label: "New chat" },
+  { href: "/", label: "Wall" },
   { href: "/inbox", label: "Inbox" },
   { href: "/settings", label: "Settings" },
 ] as const;
 
 export type SwipeDir = "next" | "prev";
 
-/** Which page a path belongs to; job pages count as the Board. */
+/** Which page a path belongs to; job and form pages count as the Wall. */
 export function pageIndex(path: string): number {
   const i = PAGES.findIndex((p) => (p.href === "/" ? path === "/" : path === p.href || path.startsWith(`${p.href}/`)));
   return i < 0 ? 0 : i;

@@ -131,7 +131,7 @@ export function Wall() {
   const dims = SIZES[size];
 
   return (
-    <div ref={wallRef} className="wall -mx-4 -mt-4 min-h-[calc(100dvh-3.5rem)] bg-[#06080a] p-2 sm:p-3">
+    <div ref={wallRef} className="wall -mx-4 min-h-[calc(100dvh-12rem)] bg-[#06080a] p-2 sm:p-3">
       <div className="mb-2 flex flex-wrap items-center gap-2 px-1 font-mono text-xs text-[#7d8590]">
         <span className="text-[#d6dae0]">{tiles.length} agents</span>
         <span className="text-[#4ade80]">{running} running</span>
@@ -171,7 +171,7 @@ export function Wall() {
         <p className="p-4 font-mono text-sm text-[#7d8590]">connecting…</p>
       ) : tiles.length === 0 ? (
         <div className="p-8 text-center font-mono text-sm text-[#7d8590]">
-          no live agents. <Link href="/new" className="text-[#a5b4fc]">start a job →</Link>
+          no live agents. type a task in the box above to start one.
         </div>
       ) : (
         <div className="grid gap-1.5 sm:gap-2" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${dims.min}px), 1fr))` }}>

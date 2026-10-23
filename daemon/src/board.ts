@@ -3,7 +3,8 @@ import { z } from "zod";
 
 // SPEC.md §6.2 — the shared board, exposed to agents as in-process MCP tools (mcp__wdash__*).
 
-export type PlannedWorker = { name: string; task: string; globs: string[] };
+/** `helps`: a slow worker this one takes part of the work from (its globs may overlap that worker's). */
+export type PlannedWorker = { name: string; task: string; globs: string[]; helps?: string };
 
 /** Operations the board tools call. Implemented by JobRunner; each returns text for the model. */
 export interface TeamApi {
@@ -55,6 +56,10 @@ const workerShape = z.object({
   name: z.string().regex(/^[a-z][a-z0-9-]{0,23}$/).describe("Short id like 'solver' or 'tests'"),
   task: z.string().min(1).describe("What this worker must do, with acceptance criteria"),
   globs,
+  helps: z
+    .string()
+    .optional()
+    .describe("Only when splitting a slow worker's work: that worker's name. The helper may take a subset of its paths."),
 });
 
 export function orchestratorServer(api: TeamApi, selfId: string): McpSdkServerConfigWithInstance {

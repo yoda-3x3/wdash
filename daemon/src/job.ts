@@ -46,7 +46,15 @@ type WorkerState = {
   idleNudges: number;
   /** Reported done with passing checks and waiting on the orchestrator's review: don't nudge it. */
   awaitingReview?: boolean;
+  startedAt?: number;
+  /** The orchestrator was already asked to add helpers for this worker. */
+  helpAsked?: boolean;
+  /** Set on a helper: the slow worker it took work from. */
+  helps?: string;
 };
+
+/** At most this many helpers per slow worker. */
+const MAX_HELPERS = 5;
 
 const ORCH = "orchestrator";
 
@@ -236,7 +244,7 @@ export class JobRunner implements AgentHost, TeamApi {
       if (rec.role === "worker") {
         cwd = await G.addWorktree(this.repoDir, this.wtPath(rec.id), branchFor.worker(this.jobId, rec.id), branchFor.main(this.jobId));
         await this.syncAttachments(cwd);
-        this.workers.set(rec.id, { rounds: rec.reviewRounds, failedChecks: 0, approved: false, idleNudges: 0 });
+        this.workers.set(rec.id, { rounds: rec.reviewRounds, failedChecks: 0, approved: false, idleNudges: 0, startedAt: Date.now() });
       }
       const prompt =
         rec.role === "orchestrator"
@@ -659,7 +667,17 @@ export class JobRunner implements AgentHost, TeamApi {
 
   async spawnWorker(w: PlannedWorker): Promise<string> {
     if (this.agents.has(w.name)) throw new Error(`Worker ${w.name} already exists.`);
-    const conflicts = conflictingClaims(await this.relay.getClaims(this.jobId), w.globs, w.name);
+    const claims = await this.relay.getClaims(this.jobId);
+    if (w.helps) {
+      const parent = this.workers.get(w.helps);
+      if (!parent || !this.agents.has(w.helps)) throw new Error(`No worker ${w.helps} to help.`);
+      if (parent.helps) throw new Error(`${w.helps} is itself a helper; split the original worker's work instead.`);
+      const helpers = [...this.workers.values()].filter((x) => x.helps === w.helps).length;
+      if (helpers >= MAX_HELPERS) throw new Error(`${w.helps} already has ${MAX_HELPERS} helpers.`);
+    }
+    // A helper may take paths from the worker it helps; no one else's.
+    const others = w.helps ? Object.fromEntries(Object.entries(claims).filter(([, owner]) => owner !== w.helps)) : claims;
+    const conflicts = conflictingClaims(others, w.globs, w.name);
     if (conflicts.length) throw new Error(`Ownership conflicts: ${conflicts.join("; ")}`);
     const preset = MODEL_PRESETS[this.job.models];
     const branch = branchFor.worker(this.jobId, w.name);
@@ -679,10 +697,16 @@ export class JobRunner implements AgentHost, TeamApi {
       costUsd: 0,
     };
     await this.relay.setClaims(this.jobId, w.name, w.globs);
-    this.workers.set(w.name, { rounds: 0, failedChecks: 0, approved: false, idleNudges: 0 });
+    this.workers.set(w.name, { rounds: 0, failedChecks: 0, approved: false, idleNudges: 0, startedAt: Date.now(), helps: w.helps });
     const runner = this.makeRunner(rec, cwd, workerPrompt(this.job, this.project, rec));
     await runner.save();
     runner.start(`# Your task\n\n${w.task}\n\nYou own: ${w.globs.join(", ")}. When finished, call board_report_done.`);
+    if (w.helps) {
+      this.agents
+        .get(w.helps)
+        ?.send(`[wdash] Helper ${w.name} is taking over ${w.globs.join(", ")} to speed things up. Don't edit those paths any more; call sync_with_main later to get its merged work.`);
+      await this.info(`Helper ${w.name} is helping ${w.helps} with ${w.globs.join(", ")}.`);
+    }
     return `Spawned ${w.name}.`;
   }
 
@@ -923,6 +947,7 @@ export class JobRunner implements AgentHost, TeamApi {
   }
 
   private async checkStalls(): Promise<void> {
+    await this.offerHelpers();
     const limit = env().WDASH_STALL_MINUTES * 60_000;
     for (const a of this.agents.values()) {
       const stalled = a.rec.status === "running" && Date.now() - a.rec.lastEventAt > limit;
@@ -934,6 +959,29 @@ export class JobRunner implements AgentHost, TeamApi {
         await clear(this.relay, this.jobId, "stalled", a.id);
       }
       await a.save();
+    }
+  }
+
+  /**
+   * A worker that's been at it for a while gets help: the orchestrator is asked (once per worker) to split
+   * its remaining work across up to MAX_HELPERS new workers. Helpers don't get helpers.
+   */
+  private async offerHelpers(): Promise<void> {
+    if (this.job.kind === "chat" || this.finishing) return;
+    const after = env().WDASH_HELP_MINUTES * 60_000;
+    for (const [name, ws] of this.workers) {
+      const a = this.agents.get(name);
+      if (!a || ws.helps || ws.helpAsked || ws.approved || ws.awaitingReview || !ws.startedAt) continue;
+      if (!["running", "starting", "idle"].includes(a.rec.status) || Date.now() - ws.startedAt < after) continue;
+      ws.helpAsked = true;
+      const mins = Math.round((Date.now() - ws.startedAt) / 60_000);
+      await this.info(`${name} has been working for ${mins} min; asking the orchestrator to split its work across helpers.`);
+      this.agents.get(this.lead)?.send(
+        `[wdash] Worker ${name} has been working for ${mins} minutes on: ${truncate(a.rec.task, 400)}\n` +
+          `It owns: ${a.rec.globs.join(", ")}. Speed it up: ask it (board_post) what's left, then spawn up to ${MAX_HELPERS} helper workers with team_spawn_worker, ` +
+          `each with helps: "${name}", a clear slice of the remaining work, and a subset of ${name}'s paths (no two helpers on the same paths). ` +
+          `Those paths move to the helper. Skip it if ${name} is nearly done.`,
+      );
     }
   }
 

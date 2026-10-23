@@ -95,7 +95,7 @@ export const JobRecord = z.object({
   kind: JobKind.default("team"),
   chatModel: ChatModel.default("sonnet"),
   runOn: RunOn.default("auto"),
-  models: ModelPreset.default("opus-sonnet"),
+  models: ModelPreset.default("sonnet-haiku"),
   workers: z.string().default("auto"), // "auto" | "1".."4"
   budgetUsd: num,
   reviewCap: num.default(3),
@@ -163,7 +163,7 @@ export const NewJobInput = z.object({
   kind: JobKind.default("team"),
   chatModel: ChatModel.default("sonnet"),
   runOn: RunOn.default("auto"),
-  models: ModelPreset.default("opus-sonnet"),
+  models: ModelPreset.default("sonnet-haiku"),
   workers: z.enum(["auto", "1", "2", "3", "4"]).default("auto"),
   budgetUsd: z.number().positive().max(500).optional(),
   reviewCap: z.number().int().min(1).max(10).default(3),

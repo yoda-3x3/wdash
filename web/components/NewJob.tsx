@@ -25,13 +25,13 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
   const [task, setTask] = useState("");
   const [advanced, setAdvanced] = useState(false);
   const [workers, setWorkers] = useState("auto");
-  const [models, setModels] = useState<ModelPreset>("opus-sonnet");
+  const [models, setModels] = useState<ModelPreset>("sonnet-haiku");
   const [chatModel, setChatModel] = useState<ChatModel>("sonnet");
   const [autoMode, setAutoMode] = useState(false);
 
   useEffect(() => {
     try {
-      setAutoMode(localStorage.getItem(AUTO_MODE) === "1");
+      setAutoMode(localStorage.getItem(AUTO_MODE) !== "0"); // on unless turned off
     } catch {
       /* storage blocked */
     }

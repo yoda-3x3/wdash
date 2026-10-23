@@ -20,6 +20,8 @@ const Env = z.object({
   VAPID_SUBJECT: z.string().default("mailto:wdash@example.com"),
   /** Minutes without events before a running agent counts as stalled. */
   WDASH_STALL_MINUTES: z.coerce.number().default(10),
+  /** Minutes a worker may run before the orchestrator is asked to split its work across helpers. */
+  WDASH_HELP_MINUTES: z.coerce.number().default(10),
 });
 
 export type Env = z.infer<typeof Env>;

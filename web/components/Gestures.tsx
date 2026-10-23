@@ -117,7 +117,7 @@ function Camera({ onStatus, onError, onClose }: { onStatus: (s: "loading" | "rea
           return;
         case "board":
           if (path !== "/") router.push("/");
-          say("✋ Board");
+          say("✋ Wall");
           return;
         case "prev_page":
         case "next_page": {
@@ -202,7 +202,7 @@ function Camera({ onStatus, onError, onClose }: { onStatus: (s: "loading" | "rea
         if (v.readyState >= 2 && v.currentTime !== last) {
           last = v.currentTime;
           const r = recognizer!.recognizeForVideo(v, now);
-          const c = classify(r.gestures, r.landmarks, { countFingers: ctx.current.path === "/wall" });
+          const c = classify(r.gestures, r.landmarks, { countFingers: ctx.current.path === "/" });
           for (const a of tracker.update(c.pose, c.wrist, now)) void run(a);
           setPose(tracker.current);
           setProgress(pausedRef.current && tracker.current !== "shaka" ? 0 : tracker.progress(now));

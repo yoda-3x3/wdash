@@ -157,7 +157,7 @@ function Header({ job, lease, onChange }: { job: JobRecord; lease: string | null
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
         <Link href="/" className="hover:text-fg">
-          ← Board
+          ← Wall
         </Link>
         <span>·</span>
         <span className="font-medium text-fg">{projectLabel(job.project)}</span>

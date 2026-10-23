@@ -1,12 +1,6 @@
-import { Shell } from "@/components/Shell";
-import { Wall } from "@/components/Wall";
-import { requirePageUser } from "@/lib/page-auth";
+import { redirect } from "next/navigation";
 
-export default async function Page() {
-  await requirePageUser();
-  return (
-    <Shell wide>
-      <Wall />
-    </Shell>
-  );
+// The Wall is the home page now.
+export default function Page() {
+  redirect("/");
 }

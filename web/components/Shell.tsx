@@ -63,7 +63,7 @@ export function Shell({ children, wide = false }: { children: React.ReactNode; w
                 <Link
                   key={n.href}
                   href={n.href}
-                  className={`relative rounded-lg px-2.5 py-1.5 ${active ? "bg-panel-2 font-medium" : "text-muted hover:text-fg"} ${n.href === "/new" || n.href === "/chat/new" ? "hidden sm:inline-flex" : ""}`}
+                  className={`relative rounded-lg px-2.5 py-1.5 ${active ? "bg-panel-2 font-medium" : "text-muted hover:text-fg"}`}
                 >
                   {n.label}
                   {n.href === "/inbox" && inbox > 0 && (
@@ -82,14 +82,6 @@ export function Shell({ children, wide = false }: { children: React.ReactNode; w
           {children}
         </main>
       </div>
-      {!wide && (
-      <Link
-        href="/new"
-        className="btn btn-primary fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 z-20 rounded-full px-5 py-3 shadow-lg sm:hidden"
-      >
-        + New
-      </Link>
-      )}
     </Ctx.Provider>
   );
 }

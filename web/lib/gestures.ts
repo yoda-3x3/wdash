@@ -217,9 +217,9 @@ export const POSE_EMOJI: Record<Pose, string> = {
 export const LEGEND: Array<[string, string]> = [
   ["👍 hold", "Allow the next permission request"],
   ["👎 hold", "Deny it"],
-  ["👉 point right", "Next page (Board → Wall → … → Settings)"],
+  ["👉 point right", "Next page (Wall → Inbox → Settings)"],
   ["👈 point left", "Previous page"],
-  ["✋ hold still", "Go to the Board"],
+  ["✋ hold still", "Go to the Wall"],
   ["☝️ / 👇", "Scroll up / down"],
   ["🤟 hold", "Dictate into the chat box"],
   ["✊ hold", "Send the message (stops dictation)"],
