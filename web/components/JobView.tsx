@@ -187,6 +187,7 @@ function Header({ job, lease, onChange, onCall }: { job: JobRecord; lease: strin
             Actions run ↗
           </a>
         )}
+        {job.lite && <span title="Low usage mode: minimal tools, low effort, short prompts">🪶 low usage</span>}
         {job.mergeState !== "none" && <span>merge: {job.mergeState.replaceAll("_", " ")}</span>}
         {lease && <span>runner: {lease.startsWith("cloud") ? "cloud" : "PC"}</span>}
         <span className="ml-auto flex gap-2">

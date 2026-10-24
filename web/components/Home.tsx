@@ -11,7 +11,7 @@ import { useBoard } from "./Shell";
 import { Wall } from "./Wall";
 
 // Shared with the full New job form, so both remember the same choices.
-export const PREFS = { project: "wdash:lastProject", kind: "wdash:lastKind", auto: "wdash:autoMode" } as const;
+export const PREFS = { project: "wdash:lastProject", kind: "wdash:lastKind", auto: "wdash:autoMode", lite: "wdash:lite" } as const;
 
 const get = (k: string) => {
   try {
@@ -52,11 +52,13 @@ function QuickStart() {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string>();
+  const [lite, setLite] = useState(false);
   const files = useUploads("/api/uploads");
   const box = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (get(PREFS.kind) === "chat") setKind("chat");
+    setLite(get(PREFS.lite) === "1");
   }, []);
   useEffect(() => {
     if (project || !data) return;
@@ -87,6 +89,7 @@ function QuickStart() {
         workers: "auto",
         runOn: "auto",
         autoMode: auto,
+        lite,
         attachments: files.ready.map((f) => f.id),
       });
       setText("");
@@ -125,6 +128,18 @@ function QuickStart() {
             </option>
           ))}
         </select>
+        <button
+          type="button"
+          className={`rounded-lg border px-2 py-1 text-xs ${lite ? "border-accent/60 text-accent" : "border-line text-muted"}`}
+          title="Low usage mode: fewer tools, low effort, short prompts, one worker. Uses far fewer tokens."
+          aria-pressed={lite}
+          onClick={() => {
+            setLite(!lite);
+            put(PREFS.lite, lite ? "0" : "1");
+          }}
+        >
+          🪶 Low usage {lite ? "on" : "off"}
+        </button>
         <Link href={kind === "chat" ? "/chat/new" : "/new"} className="ml-auto text-xs text-muted hover:text-fg">
           More options
         </Link>

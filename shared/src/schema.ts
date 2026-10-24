@@ -120,10 +120,17 @@ export const JobRecord = z.object({
   archived: bool.default(false),
   /** Approve permission requests automatically (hard denies still apply; questions still go to the user). */
   autoMode: bool.default(false),
+  /** Low usage mode: fewer tools, low effort, short prompts, one worker and one review round. */
+  lite: bool.default(false),
   /** A finished job the user reopened with a follow-up message; the runner tells the agents, then clears it. */
   reopened: bool.default(false),
 });
 export type JobRecord = z.infer<typeof JobRecord>;
+
+/** Built-in tools agents get in low usage mode. Every tool definition is resent each turn, and subagents multiply usage. */
+export const LITE_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "AskUserQuestion"];
+/** Low usage mode caps the project CLAUDE.md appended to each agent's system prompt at this many characters. */
+export const LITE_NOTES_CHARS = 3000;
 
 // ---------- Attachments ----------
 
@@ -174,6 +181,7 @@ export const NewJobInput = z.object({
   budgetUsd: z.number().positive().max(500).optional(),
   reviewCap: z.number().int().min(1).max(10).default(3),
   autoMode: z.boolean().default(false),
+  lite: z.boolean().default(false),
   /** Upload ids from POST /api/uploads. */
   attachments: z.array(z.string()).max(MAX_ATTACHMENTS).default([]),
 });
