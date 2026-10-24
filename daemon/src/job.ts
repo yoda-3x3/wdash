@@ -368,7 +368,9 @@ export class JobRunner implements AgentHost, TeamApi {
   private async handleCommand(cmd: Command): Promise<void> {
     switch (cmd.type) {
       case "user_message": {
-        const target = this.agents.get(cmd.agentId ?? this.lead) ?? this.agents.get(this.lead);
+        if (cmd.agentId === "*") return this.conference(cmd.text);
+        const woken = cmd.agentId && cmd.agentId !== this.lead ? await this.wakeWorker(cmd.agentId, "message from the user") : undefined;
+        const target = woken ?? this.agents.get(cmd.agentId ?? this.lead) ?? this.agents.get(this.lead);
         if (!target) return;
         await this.relay.emit({ jobId: this.jobId, agentId: target.id, type: "message", payload: { role: "user", text: cmd.text } });
         await clear(this.relay, this.jobId, "waiting_for_input", target.id);
@@ -639,7 +641,8 @@ export class JobRunner implements AgentHost, TeamApi {
   // =====================================================================
 
   async post(fromId: string, to: string, text: string): Promise<string> {
-    const targets = to === "all" ? [...this.agents.values()].filter((a) => a.id !== fromId) : [this.agents.get(to)].filter((a): a is AgentRunner => !!a);
+    const named = to === "all" ? undefined : ((await this.wakeWorker(to, `message from ${fromId}`)) ?? this.agents.get(to));
+    const targets = to === "all" ? [...this.agents.values()].filter((a) => a.id !== fromId) : [named].filter((a): a is AgentRunner => !!a);
     if (!targets.length) throw new Error(`No agent named '${to}'. Agents: ${[...this.agents.keys()].join(", ")}`);
     await this.relay.r.xadd(K.board(this.jobId), "MAXLEN", "~", "5000", "*", "m", JSON.stringify({ ts: Date.now(), from: fromId, to, text }));
     await this.relay.emit({ jobId: this.jobId, agentId: fromId, type: "board", payload: { from: fromId, to, text } });
@@ -648,6 +651,51 @@ export class JobRunner implements AgentHost, TeamApi {
       t.send(`[board] from ${fromId}: ${text}`);
     }
     return `Delivered to ${targets.map((t) => t.id).join(", ")}.`;
+  }
+
+  /**
+   * Bring a finished worker back: a new runner on the same session (so it remembers), in its worktree
+   * updated with the job branch. It goes through review again before the job can finish.
+   * Returns undefined when `name` isn't a finished worker (live ones are returned as they are).
+   */
+  private async wakeWorker(name: string, why: string): Promise<AgentRunner | undefined> {
+    const current = this.agents.get(name);
+    if (current && !["done", "stopped", "failed"].includes(current.rec.status)) return current;
+    if (this.scratch || this.finishing) return undefined;
+    const rec = current?.rec ?? (await this.relay.getAgents(this.jobId)).find((r) => r.id === name);
+    if (!rec || rec.role !== "worker") return undefined;
+    const branch = rec.branch ?? branchFor.worker(this.jobId, name);
+    const cwd = await G.addWorktree(this.repoDir, this.wtPath(name), branch, branchFor.main(this.jobId));
+    await G.mergeInto(cwd, branchFor.main(this.jobId), "wdash: sync with job branch").catch(() => undefined);
+    await this.syncAttachments(cwd);
+    const prev = this.workers.get(name);
+    this.workers.set(name, { rounds: rec.reviewRounds, failedChecks: 0, approved: false, idleNudges: 0, startedAt: Date.now(), helps: prev?.helps, helpAsked: true });
+    await this.relay.setClaims(this.jobId, name, rec.globs);
+    rec.status = "starting";
+    const runner = this.makeRunner(rec, cwd, workerPrompt(this.job, this.project, rec));
+    await runner.save();
+    runner.start(
+      `[wdash] You finished earlier and your work was merged; you've been woken up (${why}). Your worktree has the latest job branch. ` +
+        `Do what's asked; if you change files, call board_report_done again when finished.`,
+    );
+    await this.info(`Woke ${name} (${why}).`);
+    return runner;
+  }
+
+  /** Conference call: the user's message goes to the whole team, finished workers included. */
+  private async conference(text: string): Promise<void> {
+    await this.relay.emit({ jobId: this.jobId, agentId: "everyone", type: "message", payload: { role: "user", text, conference: true } });
+    await clear(this.relay, this.jobId, "waiting_for_input");
+    const names = new Set([...this.agents.keys(), ...(await this.relay.getAgents(this.jobId)).map((r) => r.id)]);
+    for (const name of names) {
+      const a = name === this.lead ? this.agents.get(name) : ((await this.wakeWorker(name, "conference call")) ?? this.agents.get(name));
+      if (!a || ["done", "stopped", "failed"].includes(a.rec.status)) continue;
+      a.send(
+        `[conference] The user, on a call with the whole team (${[...names].join(", ")}): ${text}\n\n` +
+          `Answer the user directly in 1-3 short, spoken-style sentences (it may be read aloud): what you're doing, or your answer. Then carry on.`,
+      );
+      if (a.rec.status === "idle") await a.setStatus("running");
+    }
   }
 
   async submitPlan(summary: string, workers: PlannedWorker[]): Promise<string> {

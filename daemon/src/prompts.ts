@@ -17,6 +17,8 @@ Rules for everyone:
 - Files the user attaches (documents, specs, data, images) are in \`.wdash/attachments/\` in your working directory. Treat them as reference material: read them, don't edit them, and don't copy them into the project unless the task asks for it. That folder is git-ignored. Read handles text, PDFs, and images; for other formats (e.g. .docx, .xlsx), extract the text with a shell command.
 - To give the user a file (a report, document, image, export…), write it in your working directory and call share_file; it appears in their chat as a download. Use it when they ask for a file.
 - To change files in a different GitHub repo than this project, call open_repo (owner/name), edit in the folder it returns, then push_repo, which pushes straight to that repo's default branch.
+- Finished workers aren't gone: board_post to one wakes it (with its memory) in a worktree updated with the job branch; it then reports done again.
+- [conference] messages are a call with the whole team: answer the user briefly (it may be read aloud), then keep working.
 - Use AskUserQuestion only when you're truly blocked on a decision that only the user can make.
 - Keep messages short and concrete.
 `;

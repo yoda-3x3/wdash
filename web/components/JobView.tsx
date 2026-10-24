@@ -8,6 +8,7 @@ import { CHAT_AGENT, NO_PROJECT, TERMINAL_STATUSES, projectLabel } from "@wdash/
 import { api, timeAgo, tokenTitle, tokens, usd, usePoll } from "@/lib/client";
 import { ApproveAll, AttentionCard, Bar, LocationBadge, StatusChip } from "./bits";
 import { AttachButton, FileChips, dropProps, fmtSize, useUploads } from "./Attachments";
+import { Conference } from "./Conference";
 
 type Detail = {
   job: JobRecord;
@@ -24,6 +25,7 @@ const TABS = ["timeline", "team", "diff", "usage"] as const;
 type Tab = (typeof TABS)[number];
 
 export function JobView({ id }: { id: string }) {
+  const [call, setCall] = useState(false);
   const params = useSearchParams();
   const router = useRouter();
   const tab = (TABS.includes(params.get("tab") as Tab) ? params.get("tab") : "timeline") as Tab;
@@ -46,7 +48,8 @@ export function JobView({ id }: { id: string }) {
 
   return (
     <div className="space-y-4">
-      <Header job={job} lease={detail.lease} onChange={refresh} />
+      <Header job={job} lease={detail.lease} onChange={refresh} onCall={archived ? undefined : () => setCall(true)} />
+      {call && <Conference jobId={id} agents={agents} events={events} onClose={() => setCall(false)} />}
       <JobFiles jobId={id} files={detail.files ?? []} />
 
       {detail.attention.some((a) => a.reason !== "question") && (
@@ -139,7 +142,7 @@ function useEvents(id: string | null): WdEvent[] {
 
 // ---------------------------------------------------------------- header
 
-function Header({ job, lease, onChange }: { job: JobRecord; lease: string | null; onChange: () => void }) {
+function Header({ job, lease, onChange, onCall }: { job: JobRecord; lease: string | null; onChange: () => void; onCall?: () => void }) {
   const [busy, setBusy] = useState(false);
   const terminal = TERMINAL_STATUSES.includes(job.status);
   async function cmd(body: unknown, confirmMsg?: string) {
@@ -200,6 +203,11 @@ function Header({ job, lease, onChange }: { job: JobRecord; lease: string | null
               }
             >
               ⚡ Auto {job.autoMode ? "on" : "off"}
+            </button>
+          )}
+          {onCall && (!terminal || job.status === "done") && (
+            <button className="btn" onClick={onCall} title="Talk to the orchestrator and every agent at once">
+              📞 Call
             </button>
           )}
           {!terminal && job.status !== "paused" && (
@@ -888,13 +896,15 @@ function ChatBox({ jobId, agents, lead, asking, reopen = false }: { jobId: strin
       <FileChips items={files.items} onRemove={files.remove} />
       <div className="flex gap-2">
         <AttachButton onFiles={files.add} compact />
-        {live.length > 1 && (
-          <select className="input w-auto max-w-32" value={to} onChange={(e) => setTo(e.target.value)}>
-            {live.map((a) => (
+        {agents.length > 1 && (
+          <select className="input w-auto max-w-36" value={to} onChange={(e) => setTo(e.target.value)} aria-label="Send to">
+            {agents.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.id}
+                {live.includes(a) ? "" : " (wakes up)"}
               </option>
             ))}
+            <option value="*">everyone</option>
           </select>
         )}
         <input data-chat-input className="input" placeholder={reopen ? `Follow up with ${to}… (reopens the job)` : asking.includes(to) ? `Answer ${to}'s question…` : `Message ${to}…`} value={text} onChange={(e) => setText(e.target.value)} />
