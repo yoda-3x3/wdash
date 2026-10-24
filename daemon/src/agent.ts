@@ -10,7 +10,7 @@ import {
   type McpSdkServerConfigWithInstance,
   USAGE_LIMIT_ERROR_PREFIXES,
 } from "@anthropic-ai/claude-agent-sdk";
-import { truncate, sessionProjectKey, type AgentRecord, type AgentStatus } from "@wdash/shared";
+import { truncate, sessionProjectKey, LITE_NOTES_CHARS, LITE_TOOLS, type AgentRecord, type AgentStatus } from "@wdash/shared";
 import { AsyncQueue } from "./asyncQueue.js";
 import { decide, DISALLOWED_TOOLS, type PolicyContext } from "./permissions.js";
 import { redisSessionStore } from "./sessionStore.js";
@@ -36,6 +36,8 @@ export type AgentOptions = {
   systemAppend: string;
   /** Extra env for the Claude Code subprocess (e.g. CLAUDE_CODE_OAUTH_TOKEN in the cloud). */
   env?: Record<string, string | undefined>;
+  /** Low usage mode: a minimal tool set, low effort, and a capped CLAUDE.md. */
+  lite?: boolean;
 };
 
 /** One Agent SDK session (orchestrator or worker), kept alive across turns via streaming input. */
@@ -143,7 +145,9 @@ export class AgentRunner {
     };
 
     const claudeMd = join(this.opts.cwd, "CLAUDE.md");
-    const projectNotes = existsSync(claudeMd) ? `\n\n# Project CLAUDE.md\n${readFileSync(claudeMd, "utf8")}` : "";
+    const lite = !!this.opts.lite;
+    const notes = existsSync(claudeMd) ? readFileSync(claudeMd, "utf8") : "";
+    const projectNotes = notes ? `\n\n# Project CLAUDE.md\n${lite ? truncate(notes, LITE_NOTES_CHARS) : notes}` : "";
 
     return {
       cwd: this.opts.cwd,
@@ -153,6 +157,7 @@ export class AgentRunner {
       // No filesystem settings: user/project allow-rules would bypass the wdash policy. CLAUDE.md is appended instead.
       settingSources: [],
       disallowedTools: DISALLOWED_TOOLS,
+      ...(lite ? { tools: LITE_TOOLS, effort: "low" as const } : {}),
       mcpServers: { wdash: this.host.mcpServer(this) },
       systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: this.opts.systemAppend + projectNotes },
       resume: this.rec.sessionId,

@@ -93,8 +93,10 @@ export async function createJob(input: NewJobInput, project: ProjectConfig): Pro
     models: input.models,
     workers: input.workers,
     budgetUsd: input.budgetUsd ?? project.defaultBudgetUsd,
-    reviewCap: input.reviewCap,
+    // Low usage mode: one review round per worker before asking the user.
+    reviewCap: input.lite ? 1 : input.reviewCap,
     autoMode: input.autoMode,
+    lite: input.lite,
     costUsd: 0,
     createdAt: now,
     updatedAt: now,

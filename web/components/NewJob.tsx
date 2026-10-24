@@ -7,6 +7,7 @@ import { MAX_WORKERS, MODEL_PRESETS, NO_PROJECT, WORKER_CHOICES, type ChatModel,
 import { api, usePoll } from "@/lib/client";
 import { useBoard } from "./Shell";
 import { AttachButton, FileChips, dropProps, useUploads } from "./Attachments";
+import { PREFS } from "./Home";
 
 const LAST_PROJECT = "wdash:lastProject";
 const AUTO_MODE = "wdash:autoMode";
@@ -28,10 +29,12 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
   const [models, setModels] = useState<ModelPreset>("sonnet-haiku");
   const [chatModel, setChatModel] = useState<ChatModel>("sonnet");
   const [autoMode, setAutoMode] = useState(false);
+  const [lite, setLite] = useState(false);
 
   useEffect(() => {
     try {
       setAutoMode(localStorage.getItem(AUTO_MODE) !== "0"); // on unless turned off
+      setLite(localStorage.getItem(PREFS.lite) === "1");
     } catch {
       /* storage blocked */
     }
@@ -71,6 +74,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
       try {
         localStorage.setItem(LAST_PROJECT, project);
         localStorage.setItem(AUTO_MODE, autoMode ? "1" : "0");
+        localStorage.setItem(PREFS.lite, lite ? "1" : "0");
       } catch {
         /* ignore */
       }
@@ -84,6 +88,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
         runOn,
         reviewCap,
         autoMode,
+        lite,
         budgetUsd: budget ? Number(budget) : undefined,
         attachments: files.ready.map((f) => f.id),
       });
@@ -179,6 +184,16 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
         </span>
       </label>
 
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" className="mt-1" checked={lite} onChange={(e) => setLite(e.target.checked)} />
+        <span>
+          <span className="font-medium">🪶 Low usage mode</span>
+          <span className="block text-xs text-muted">
+            Uses as few tokens as possible: a minimal tool set (no subagents or web tools), low effort, short prompts{chat ? "" : ", one worker unless the task really splits, and one review round"}. Best for small, well-defined tasks.
+          </span>
+        </span>
+      </label>
+
       <button type="button" className="text-sm text-accent" onClick={() => setAdvanced((v) => !v)}>
         {advanced ? "▾" : "▸"} Advanced
       </button>
@@ -221,7 +236,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
           </Field>
           {!chat && (
             <Field label="Review rounds per worker before asking you">
-              <input className="input" type="number" min={1} max={10} value={reviewCap} onChange={(e) => setReviewCap(Number(e.target.value))} />
+              <input className="input" type="number" min={1} max={10} value={lite ? 1 : reviewCap} disabled={lite} onChange={(e) => setReviewCap(Number(e.target.value))} />
             </Field>
           )}
         </div>

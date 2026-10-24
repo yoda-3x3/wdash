@@ -187,7 +187,7 @@ export class JobRunner implements AgentHost, TeamApi {
     await runner.save();
     const files = (await this.relay.listFiles(this.jobId)).map((f) => f.name);
     const attached = files.length ? `\n\nThe user attached: ${files.join(", ")} (in ${ATTACHMENTS_DIR}/).` : "";
-    runner.start(`# Task from the user\n\n${this.job.task}${attached}\n\nStart by exploring the repo, then submit a plan with team_plan.`);
+    runner.start(`# Task from the user\n\n${this.job.task}${attached}\n\n${this.job.lite ? "Look only at what you need, then submit a plan with team_plan." : "Start by exploring the repo, then submit a plan with team_plan."}`);
   }
 
   private async startChat(): Promise<void> {
@@ -288,7 +288,7 @@ export class JobRunner implements AgentHost, TeamApi {
   }
 
   private makeRunner(rec: AgentRecord, cwd: string, systemAppend: string): AgentRunner {
-    const runner = new AgentRunner(this, rec, { cwd, systemAppend, env: this.agentEnv });
+    const runner = new AgentRunner(this, rec, { cwd, systemAppend, env: this.agentEnv, lite: this.job.lite });
     this.agents.set(rec.id, runner);
     return runner;
   }
@@ -834,7 +834,7 @@ export class JobRunner implements AgentHost, TeamApi {
     await this.relay.emit({ jobId: this.jobId, agentId, type: "diff", payload: { branch: a.rec.branch, files: d.files, stat: d.stat, patch: d.patch } });
     const ws = this.workers.get(agentId);
     const checks = ws?.lastChecks ? `Checks at ${ws.lastChecks.sha.slice(0, 8)}: ${checksSummary(ws.lastChecks.results)}` : "No checks run yet.";
-    return `${checks}\nReview round ${ws?.rounds ?? 0}/${this.job.reviewCap}\n\n${d.stat}\n\n${truncate(d.patch, 60_000)}`;
+    return `${checks}\nReview round ${ws?.rounds ?? 0}/${this.job.reviewCap}\n\n${d.stat}\n\n${truncate(d.patch, this.job.lite ? 20_000 : 60_000)}`;
   }
 
   async requestChanges(agentId: string, notes: string): Promise<string> {
@@ -902,7 +902,7 @@ export class JobRunner implements AgentHost, TeamApi {
     const d = await G.diffAgainst(this.mainWt, await G.baseRef(this.repoDir, this.project.baseBranch, this.mode));
     await this.relay.emit({ jobId: this.jobId, agentId: this.lead, type: "diff", payload: { branch: branchFor.main(this.jobId), files: d.files, stat: d.stat, patch: d.patch, combined: true } });
     await this.relay.setStatus(this.jobId, "running");
-    return `Final checks at ${sha.slice(0, 8)}: ${checksSummary(results)}\n\nCombined diff:\n${d.stat}\n\n${truncate(d.patch, 60_000)}`;
+    return `Final checks at ${sha.slice(0, 8)}: ${checksSummary(results)}\n\nCombined diff:\n${d.stat}\n\n${truncate(d.patch, this.job.lite ? 20_000 : 60_000)}`;
   }
 
   async finish(summary: string): Promise<string> {
