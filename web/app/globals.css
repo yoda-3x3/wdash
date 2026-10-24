@@ -229,3 +229,71 @@ html[data-mood] .mood-icon {
   border-radius: 22%;
   box-shadow: 0 0 0 1px var(--accent), 0 0 8px color-mix(in srgb, var(--accent) 45%, transparent);
 }
+
+/* ---------------------------------------------------------------- call blobs (Conference) */
+.blob {
+  border-radius: 46% 54% 52% 48% / 50% 46% 54% 50%;
+  background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--blob) 55%, white) 0%, var(--blob) 45%, color-mix(in srgb, var(--blob) 60%, black) 100%);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--blob) 45%, transparent);
+  animation: blob-morph 9s ease-in-out infinite;
+  transition: transform 0.25s ease, box-shadow 0.25s ease, filter 0.25s ease;
+}
+.blob-idle {
+  filter: saturate(0.5) brightness(0.75);
+}
+.blob-working {
+  animation: blob-morph 9s ease-in-out infinite, blob-breathe 2.6s ease-in-out infinite;
+}
+.blob-talking {
+  animation: blob-morph 1.4s ease-in-out infinite, blob-talk 0.42s ease-in-out infinite alternate;
+  box-shadow: 0 0 42px color-mix(in srgb, var(--blob) 75%, transparent);
+}
+/* Ripples spreading out from a talking blob. */
+.blob-ring {
+  border: 2px solid var(--blob);
+  border-radius: 50%;
+  animation: blob-ripple 1.6s ease-out infinite;
+}
+@keyframes blob-morph {
+  0%,
+  100% {
+    border-radius: 46% 54% 52% 48% / 50% 46% 54% 50%;
+  }
+  33% {
+    border-radius: 58% 42% 45% 55% / 42% 58% 42% 58%;
+  }
+  66% {
+    border-radius: 41% 59% 60% 40% / 57% 43% 57% 43%;
+  }
+}
+@keyframes blob-breathe {
+  50% {
+    transform: scale(1.05);
+  }
+}
+@keyframes blob-talk {
+  from {
+    transform: scale(1.02);
+  }
+  to {
+    transform: scale(1.16) rotate(2deg);
+  }
+}
+@keyframes blob-ripple {
+  from {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  to {
+    transform: scale(1.7);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .blob,
+  .blob-working,
+  .blob-talking,
+  .blob-ring {
+    animation: none;
+  }
+}

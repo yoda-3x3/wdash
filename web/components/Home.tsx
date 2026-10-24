@@ -167,7 +167,7 @@ function StatusStrip() {
   const { state, refresh } = useBoard();
   const [busy, setBusy] = useState(false);
   if (!state) return null;
-  const shown = state.rateLimits.filter((r) => typeof r.utilization === "number");
+  const shown = state.rateLimits.filter((r) => typeof r.utilization === "number" || typeof r.resetsAt === "number");
   const pct = (u?: number) => ((u ?? 0) <= 1 ? (u ?? 0) * 100 : (u ?? 0));
   return (
     <div className="flex flex-wrap items-center gap-3 px-1 text-xs text-muted">
@@ -178,6 +178,7 @@ function StatusStrip() {
             <Bar value={pct(r.utilization)} max={100} />
           </span>
           {Math.round(pct(r.utilization))}%
+          {typeof r.resetsAt === "number" && <span className="text-fg/70">· {resetLabel(r.resetsAt)}</span>}
         </span>
       ))}
       <span className="ml-auto flex items-center gap-2">
@@ -200,4 +201,16 @@ function StatusStrip() {
       </span>
     </div>
   );
+}
+
+/** "resets 7:40 PM · in 2h 13m" (resetsAt is unix seconds from the SDK; ms tolerated). */
+function resetLabel(resetsAt: number): string {
+  const at = resetsAt > 1e12 ? resetsAt : resetsAt * 1000;
+  const left = at - Date.now();
+  if (left <= 0) return "reset now";
+  const sameDay = new Date(at).toDateString() === new Date().toDateString();
+  const when = new Date(at).toLocaleString([], sameDay ? { hour: "numeric", minute: "2-digit" } : { weekday: "short", hour: "numeric", minute: "2-digit" });
+  const h = Math.floor(left / 3_600_000);
+  const m = Math.round((left % 3_600_000) / 60_000);
+  return `resets ${when} · in ${h ? `${h}h ` : ""}${m}m`;
 }

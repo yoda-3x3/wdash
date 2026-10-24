@@ -16,6 +16,8 @@ type SpeechRec = {
 };
 
 const SPEAK_KEY = "wdash:callSpeak";
+/** Without read-aloud, a blob "talks" this long after its reply arrives. */
+const QUIET_TALK_MS = 3500;
 
 /** Make agent replies sound like speech: no code, markdown, or links. */
 function speakable(text: string): string {
@@ -23,28 +25,35 @@ function speakable(text: string): string {
     .replace(/```[\s\S]*?```/g, " (code) ")
     .replace(/`([^`]+)`/g, "$1")
     .replace(/https?:\/\/\S+/g, "a link")
-    .replace(/[*_#>|-]+/g, " ")
+    .replace(/[*_#>|]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 320);
 }
 
 const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+const colorFor = (id: string) => (id === "orchestrator" || id === "claude" ? "var(--accent)" : `hsl(${hash(id) % 360} 85% 62%)`);
+const clock = (ms: number) => {
+  const s = Math.floor(ms / 1000);
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+};
 
 /**
- * Conference call with the whole team: what you say (typed or spoken) goes to the orchestrator and every
- * worker, finished ones included; their replies show here and can be read aloud, one voice per agent.
+ * Conference call with the whole team: what you say (spoken or typed) goes to the orchestrator and every
+ * worker, finished ones included. Each AI is a blob that talks (ripples) while its reply is read aloud,
+ * breathes while it works, and shows its latest words as a caption.
  */
 export function Conference({ jobId, agents, events, onClose }: { jobId: string; agents: AgentRecord[]; events: WdEvent[]; onClose: () => void }) {
   const [since] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
   const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [typing, setTyping] = useState(false);
   const [listening, setListening] = useState(false);
   const [speak, setSpeak] = useState(true);
+  const [talking, setTalking] = useState<string>();
   const [err, setErr] = useState<string>();
   const rec = useRef<SpeechRec | undefined>(undefined);
   const spoken = useRef(new Set<string>());
-  const bottom = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     try {
@@ -52,24 +61,22 @@ export function Conference({ jobId, agents, events, onClose }: { jobId: string; 
     } catch {
       /* storage blocked */
     }
+    const t = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(t);
   }, []);
 
   // What was said on this call: your conference messages and every agent's replies since you joined.
   const lines = useMemo(
-    () =>
-      events.filter(
-        (e) =>
-          e.type === "message" &&
-          !e.subagentId &&
-          e.ts >= since - 2000 &&
-          (e.payload.role === "user" ? e.payload.conference === true : true),
-      ),
+    () => events.filter((e) => e.type === "message" && !e.subagentId && e.ts >= since - 2000 && (e.payload.role === "user" ? e.payload.conference === true : true)),
     [events, since],
   );
+  const latest = useMemo(() => {
+    const m = new Map<string, WdEvent>();
+    for (const e of lines) if (e.payload.role !== "user" && e.agentId) m.set(e.agentId, e);
+    return m;
+  }, [lines]);
 
-  useEffect(() => bottom.current?.scrollIntoView({ block: "end" }), [lines.length]);
-
-  // Read new replies aloud, a different voice and pitch per agent.
+  // Read new replies aloud (one voice/pitch per agent); the speaking agent's blob talks.
   useEffect(() => {
     if (!speak || typeof speechSynthesis === "undefined") return;
     const voices = speechSynthesis.getVoices().filter((v) => v.lang.startsWith(navigator.language.slice(0, 2)));
@@ -77,32 +84,41 @@ export function Conference({ jobId, agents, events, onClose }: { jobId: string; 
       const key = e.id ?? `${e.ts}-${e.agentId}`;
       if (e.payload.role === "user" || spoken.current.has(key)) continue;
       spoken.current.add(key);
-      const u = new SpeechSynthesisUtterance(`${e.agentId}: ${speakable(String(e.payload.text ?? ""))}`);
-      const h = hash(e.agentId ?? "");
+      const who = e.agentId ?? "";
+      const u = new SpeechSynthesisUtterance(speakable(String(e.payload.text ?? "")));
+      const h = hash(who);
       if (voices.length) u.voice = voices[h % voices.length]!;
       u.pitch = 0.8 + (h % 5) * 0.12;
       u.rate = 1.05;
+      u.onstart = () => setTalking(who);
+      u.onend = () => setTalking((t) => (t === who ? undefined : t));
       speechSynthesis.speak(u);
     }
   }, [lines, speak]);
 
-  useEffect(() => () => {
-    rec.current?.stop();
-    if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
-  }, []);
+  useEffect(
+    () => () => {
+      rec.current?.stop();
+      if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
+    },
+    [],
+  );
+
+  const isTalking = (id: string) => {
+    if (speak) return talking === id;
+    const last = latest.get(id);
+    return !!last && now - last.ts < QUIET_TALK_MS;
+  };
 
   async function send(msg: string) {
     const t = msg.trim();
     if (!t) return;
-    setBusy(true);
     setErr(undefined);
     try {
       await api(`/api/jobs/${jobId}/cmd`, { cmd: { type: "user_message", text: t, agentId: "*" } });
       setText("");
     } catch (e) {
       setErr((e as Error).message);
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -110,8 +126,12 @@ export function Conference({ jobId, agents, events, onClose }: { jobId: string; 
     if (rec.current) return rec.current.stop();
     const W = window as unknown as { SpeechRecognition?: new () => SpeechRec; webkitSpeechRecognition?: new () => SpeechRec };
     const Ctor = W.SpeechRecognition ?? W.webkitSpeechRecognition;
-    if (!Ctor) return setErr("This browser can't listen (try Chrome). You can still type.");
+    if (!Ctor) {
+      setTyping(true);
+      return setErr("This browser can't listen (try Chrome). Type instead.");
+    }
     if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel(); // don't talk over yourself
+    setTalking(undefined);
     const r = new Ctor();
     r.lang = navigator.language || "en-US";
     r.interimResults = true;
@@ -131,77 +151,117 @@ export function Conference({ jobId, agents, events, onClose }: { jobId: string; 
     r.onerror = () => setErr("Microphone blocked or no speech heard.");
     rec.current = r;
     setListening(true);
+    setErr(undefined);
     r.start();
   }
 
   const team = agents.filter((a) => a.role !== "chat" || agents.length === 1);
+  const myLast = [...lines].reverse().find((e) => e.payload.role === "user");
   return (
-    <div className="fixed inset-0 z-40 flex items-end justify-center bg-bg/70 p-2 backdrop-blur-sm sm:items-center" role="dialog" aria-label="Conference call">
-      <div className="card flex max-h-[90dvh] w-full max-w-2xl flex-col overflow-hidden">
-        <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-          <span className="font-medium">📞 Conference call</span>
-          <span className="flex flex-wrap gap-1">
-            <span className="chip bg-panel-2">you</span>
-            {team.map((a) => (
-              <span key={a.id} className="chip bg-panel-2" title={a.status}>
-                <span className={`h-1.5 w-1.5 rounded-full ${["running", "starting", "reviewing"].includes(a.status) ? "animate-pulse bg-ok" : a.status === "done" ? "bg-muted" : "bg-info"}`} />
-                {a.id}
-              </span>
-            ))}
-          </span>
-          <label className="ml-auto flex shrink-0 items-center gap-1 text-xs text-muted">
-            <input
-              type="checkbox"
-              checked={speak}
-              onChange={(e) => {
-                setSpeak(e.target.checked);
-                if (!e.target.checked && typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
-                try {
-                  localStorage.setItem(SPEAK_KEY, e.target.checked ? "1" : "0");
-                } catch {
-                  /* ignore */
-                }
-              }}
-            />
-            read aloud
-          </label>
-          <button className="btn py-1 text-xs" onClick={onClose}>
-            Hang up
-          </button>
-        </div>
-        <div className="min-h-40 flex-1 space-y-2 overflow-y-auto p-3 text-sm">
-          {lines.length === 0 && <p className="text-muted">You're on with the whole team. Say something; finished workers wake up to answer.</p>}
-          {lines.map((e, i) => (
-            <div key={e.id ?? i} className={e.payload.role === "user" ? "ml-10 rounded-lg bg-accent/10 px-3 py-2" : "mr-10 rounded-lg bg-panel-2 px-3 py-2"}>
-              <div className="text-[11px] text-muted">{e.payload.role === "user" ? "you → everyone" : e.agentId}</div>
-              <div className="whitespace-pre-wrap break-words">{String(e.payload.text ?? "")}</div>
-            </div>
-          ))}
-          <div ref={bottom} />
-        </div>
+    <div className="fixed inset-0 z-40 flex flex-col bg-bg" role="dialog" aria-label="Conference call">
+      <div className="flex items-center justify-center gap-3 px-4 pb-2 pt-[calc(1rem+env(safe-area-inset-top))] text-sm text-muted">
+        <span className="h-2 w-2 animate-pulse rounded-full bg-ok" />
+        Conference · {team.length + 1} on the call · {clock(now - since)}
+      </div>
+
+      <div className="flex flex-1 flex-wrap content-center items-start justify-center gap-x-8 gap-y-10 overflow-y-auto px-4 py-6">
+        <Participant
+          id="you"
+          color="var(--fg)"
+          state={listening ? "talking" : "idle"}
+          caption={listening ? text || "listening…" : myLast ? String(myLast.payload.text ?? "") : "tap 🎤 to talk"}
+        />
+        {team.map((a) => (
+          <Participant
+            key={a.id}
+            id={a.id}
+            color={colorFor(a.id)}
+            state={isTalking(a.id) ? "talking" : ["running", "starting", "reviewing"].includes(a.status) ? "working" : "idle"}
+            caption={latest.get(a.id) ? speakable(String(latest.get(a.id)!.payload.text ?? "")) : a.status === "done" ? "finished · wakes up when you talk" : a.status}
+          />
+        ))}
+      </div>
+
+      {typing && (
         <form
-          className="flex items-center gap-2 border-t border-line p-2"
+          className="mx-auto flex w-full max-w-xl gap-2 px-4 pb-2"
           onSubmit={(e) => {
             e.preventDefault();
             void send(text);
           }}
         >
-          <button
-            type="button"
-            onClick={talk}
-            className={`btn shrink-0 px-3 ${listening ? "animate-pulse border-bad text-bad" : ""}`}
-            aria-label={listening ? "Stop talking" : "Talk"}
-            title="Tap, talk, pause: it sends"
-          >
-            🎤
-          </button>
-          <input className="input" placeholder={listening ? "Listening…" : "Talk or type to everyone…"} value={text} onChange={(e) => setText(e.target.value)} />
-          <button className="btn btn-primary shrink-0" disabled={busy || !text.trim()}>
+          <input autoFocus className="input" placeholder="Type to everyone…" value={text} onChange={(e) => setText(e.target.value)} />
+          <button className="btn btn-primary shrink-0" disabled={!text.trim()}>
             Send
           </button>
         </form>
-        {err && <p className="px-3 pb-2 text-xs text-bad">{err}</p>}
+      )}
+      {err && <p className="px-4 pb-1 text-center text-xs text-bad">{err}</p>}
+
+      <div className="flex items-center justify-center gap-4 px-4 pb-[calc(1.25rem+env(safe-area-inset-bottom))] pt-2">
+        <RoundButton
+          label={speak ? "Speaker on" : "Speaker off"}
+          onClick={() => {
+            const v = !speak;
+            setSpeak(v);
+            if (!v && typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
+            setTalking(undefined);
+            try {
+              localStorage.setItem(SPEAK_KEY, v ? "1" : "0");
+            } catch {
+              /* ignore */
+            }
+          }}
+        >
+          {speak ? "🔊" : "🔇"}
+        </RoundButton>
+        <button
+          type="button"
+          onClick={talk}
+          aria-label={listening ? "Stop talking" : "Talk"}
+          className={`flex h-16 w-16 items-center justify-center rounded-full text-2xl shadow-lg transition ${listening ? "scale-110 bg-ok text-bg ring-4 ring-ok/40" : "bg-panel-2 ring-1 ring-line"}`}
+        >
+          🎤
+        </button>
+        <RoundButton label="Type" onClick={() => setTyping((v) => !v)}>
+          ⌨️
+        </RoundButton>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Hang up"
+          className="flex h-12 w-12 items-center justify-center rounded-full bg-bad text-xl text-white shadow-lg"
+          title="Hang up"
+        >
+          📞
+        </button>
       </div>
     </div>
+  );
+}
+
+function Participant({ id, color, state, caption }: { id: string; color: string; state: "talking" | "working" | "idle"; caption: string }) {
+  return (
+    <div className="flex w-36 flex-col items-center gap-2 text-center">
+      <div className="relative flex h-24 w-24 items-center justify-center" style={{ ["--blob" as string]: color }}>
+        {state === "talking" && (
+          <>
+            <span className="blob-ring absolute inset-0" />
+            <span className="blob-ring absolute inset-0" style={{ animationDelay: "0.8s" }} />
+          </>
+        )}
+        <span className={`blob absolute inset-1 ${state === "talking" ? "blob-talking" : state === "working" ? "blob-working" : "blob-idle"}`} />
+      </div>
+      <div className="text-sm font-medium">{id}</div>
+      <div className="line-clamp-3 min-h-[3em] text-xs text-muted">{caption}</div>
+    </div>
+  );
+}
+
+function RoundButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} aria-label={label} title={label} className="flex h-12 w-12 items-center justify-center rounded-full bg-panel-2 text-xl ring-1 ring-line">
+      {children}
+    </button>
   );
 }
