@@ -22,6 +22,8 @@ export const ProjectConfig = z.object({
   cloud: z.boolean().default(true),
   /** After finished work merges into the PC checkout, push the base branch to GitHub. */
   pushOnMerge: z.boolean().default(true),
+  /** Deploy to Vercel on its own: after every finished job or chat, and agents' deploys of it don't ask. */
+  autoDeploy: z.boolean().default(false),
 });
 export type ProjectConfig = z.infer<typeof ProjectConfig>;
 
@@ -307,6 +309,7 @@ export const NewProjectInput = z.object({
   description: z.string().max(300).optional(),
   testCommand: z.string().max(300).optional(),
   buildCommand: z.string().max(300).optional(),
+  autoDeploy: z.boolean().default(true),
 });
 export type NewProjectInput = z.infer<typeof NewProjectInput>;
 

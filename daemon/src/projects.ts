@@ -62,7 +62,7 @@ export async function processProjectRequests(relay: Relay): Promise<number> {
  * wdash-cloud.yml in the wdash repo checks the project out.
  */
 async function createProject(relay: Relay, req: ProjectRequest): Promise<string> {
-  const { name, description, testCommand, buildCommand } = req.input;
+  const { name, description, testCommand, buildCommand, autoDeploy } = req.input;
   const file = env().WDASH_PROJECTS_FILE;
   if (loadLocalProjects().some((p) => p.name.toLowerCase() === name.toLowerCase())) {
     if (req.repo) return name; // already adopted
@@ -96,7 +96,7 @@ async function createProject(relay: Relay, req: ProjectRequest): Promise<string>
   const commands: ProjectConfig["commands"] = {};
   if (testCommand?.trim()) commands.test = testCommand.trim();
   if (buildCommand?.trim()) commands.build = buildCommand.trim();
-  const entry = ProjectConfig.parse({ name, repo, baseBranch, localPath, commands, defaultBudgetUsd: 2, cloud: true });
+  const entry = ProjectConfig.parse({ name, repo, baseBranch, localPath, commands, defaultBudgetUsd: 2, cloud: true, autoDeploy });
   const raw = existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as unknown[]) : [];
   writeFileSync(file, `${JSON.stringify([...raw, entry], null, 2)}\n`);
   await relay.publishProjects(loadLocalProjects());

@@ -10,6 +10,7 @@
       "test": "npm test"
     },
     "defaultBudgetUsd": 3,
-    "cloud": true
+    "cloud": true,
+    "autoDeploy": false
   }
 ]

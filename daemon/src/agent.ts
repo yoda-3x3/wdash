@@ -163,7 +163,7 @@ export class AgentRunner {
       resume: this.rec.sessionId,
       sessionStore: redisSessionStore(this.host.relay, sessionProjectKey(this.host.jobId, this.id)),
       abortController: this.abort,
-      env: { ...process.env, ...this.opts.env },
+      env: agentEnv(this.opts.env),
       stderr: (s: string) => {
         if (/error/i.test(s)) void this.emit("info", { stderr: truncate(s, 2000) });
       },
@@ -258,6 +258,13 @@ export class AgentRunner {
         return;
     }
   }
+}
+
+/** The Vercel token is only for the vercel_deploy tool; agents' own shell commands never see it. */
+function agentEnv(extra?: Record<string, string | undefined>): Record<string, string | undefined> {
+  const e = { ...process.env, ...extra };
+  delete e.VERCEL_TOKEN;
+  return e;
 }
 
 function clip(v: unknown): unknown {

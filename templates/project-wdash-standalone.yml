@@ -67,5 +67,8 @@ jobs:
           VAPID_PUBLIC_KEY: ${{ secrets.WDASH_VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.WDASH_VAPID_PRIVATE_KEY }}
           WDASH_WEB_URL: ${{ secrets.WDASH_WEB_URL }}
+          # Lets agents deploy with vercel_deploy (optional).
+          VERCEL_TOKEN: ${{ secrets.WDASH_VERCEL_TOKEN }}
+          VERCEL_SCOPE: ${{ secrets.WDASH_VERCEL_SCOPE }}
           WDASH_STATE_DIR: ${{ runner.temp }}/wdash
         run: node wdash/daemon/dist/main.js cloud --job "${{ inputs.job_id }}" --repo project

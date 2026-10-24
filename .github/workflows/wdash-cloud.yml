@@ -2,7 +2,7 @@
 # Dispatched by the website on this repo; it checks out the job's project repo itself, so project repos
 # need no workflow or secrets of their own. Secrets live here, in the wdash repo:
 #   CLAUDE_CODE_OAUTH_TOKEN, WDASH_REDIS_URL, WDASH_PROJECTS_TOKEN (Contents read/write on the project repos),
-#   and optionally WDASH_VAPID_PUBLIC_KEY, WDASH_VAPID_PRIVATE_KEY, WDASH_WEB_URL.
+#   and optionally WDASH_VAPID_PUBLIC_KEY, WDASH_VAPID_PRIVATE_KEY, WDASH_WEB_URL, WDASH_VERCEL_TOKEN, WDASH_VERCEL_SCOPE.
 # `wdash-daemon setup-cloud` sets them from the PC.
 name: wdash-cloud
 
@@ -78,5 +78,8 @@ jobs:
           WDASH_WEB_URL: ${{ secrets.WDASH_WEB_URL }}
           # Lets agents open and push other repos (open_repo / push_repo).
           WDASH_PROJECTS_TOKEN: ${{ secrets.WDASH_PROJECTS_TOKEN }}
+          # Lets agents deploy with vercel_deploy (optional).
+          VERCEL_TOKEN: ${{ secrets.WDASH_VERCEL_TOKEN }}
+          VERCEL_SCOPE: ${{ secrets.WDASH_VERCEL_SCOPE }}
           WDASH_STATE_DIR: ${{ runner.temp }}/wdash
         run: node wdash/daemon/dist/main.js cloud --job "${{ inputs.job_id }}" --repo project

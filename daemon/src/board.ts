@@ -14,6 +14,7 @@ export interface TeamApi {
   shareFile(fromId: string, path: string, note?: string): Promise<string>;
   openRepo(fromId: string, repo: string): Promise<string>;
   pushRepo(fromId: string, repo: string, message: string): Promise<string>;
+  vercelDeploy(fromId: string, path: string, project: string | undefined, production: boolean): Promise<string>;
   // orchestrator
   submitPlan(summary: string, workers: PlannedWorker[]): Promise<string>;
   spawnWorker(w: PlannedWorker): Promise<string>;
@@ -73,6 +74,24 @@ function repoTools(api: TeamApi, selfId: string) {
   ];
 }
 
+/** Deploy a folder to Vercel and get its URL. Not for workers: their work isn't reviewed yet. */
+function deployTool(api: TeamApi, selfId: string) {
+  return tool(
+    "vercel_deploy",
+    "Deploy a folder to Vercel and get its live URL (sites, web apps, APIs). Asks the user first unless auto mode is on. The Vercel project is created if it doesn't exist. Use it when the user asks to deploy, publish, or host something.",
+    {
+      path: z.string().default(".").describe("Folder relative to your working directory: '.' for this repo, or a repo opened with open_repo"),
+      project: z
+        .string()
+        .max(100)
+        .optional()
+        .describe("Vercel project name; defaults to the project (or opened repo) name. Keep it the same across deploys of one app."),
+      production: z.boolean().default(true).describe("false for a preview deployment that doesn't replace the live site"),
+    },
+    (a) => wrap(() => api.vercelDeploy(selfId, a.path, a.project, a.production)),
+  );
+}
+
 const globs = z.array(z.string().min(1)).min(1).describe("Path globs relative to the repo root, posix style, e.g. src/solver/**");
 const workerShape = z.object({
   name: z.string().regex(/^[a-z][a-z0-9-]{0,23}$/).describe("Short id like 'solver' or 'tests'"),
@@ -90,6 +109,7 @@ export function orchestratorServer(api: TeamApi, selfId: string): McpSdkServerCo
     version: "0.1.0",
     tools: [
       shareTool(api, selfId),
+      deployTool(api, selfId),
       tool(
         "team_plan",
         `Submit the plan: split the task across 1-${MAX_WORKERS} workers, each owning non-overlapping path globs. Plans with 3+ workers wait for the user's approval; smaller plans start immediately.`,
@@ -135,7 +155,7 @@ export function orchestratorServer(api: TeamApi, selfId: string): McpSdkServerCo
 
 /** Chat agents work alone: no board tools, just sharing files. */
 export function chatServer(api: TeamApi, selfId: string): McpSdkServerConfigWithInstance {
-  return createSdkMcpServer({ name: "wdash", version: "0.1.0", tools: [shareTool(api, selfId), ...repoTools(api, selfId)] });
+  return createSdkMcpServer({ name: "wdash", version: "0.1.0", tools: [shareTool(api, selfId), ...repoTools(api, selfId), deployTool(api, selfId)] });
 }
 
 export function workerServer(api: TeamApi, selfId: string): McpSdkServerConfigWithInstance {

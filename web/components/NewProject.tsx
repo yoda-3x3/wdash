@@ -15,6 +15,7 @@ export function NewProject() {
   const [description, setDescription] = useState("");
   const [testCommand, setTestCommand] = useState("");
   const [buildCommand, setBuildCommand] = useState("");
+  const [autoDeploy, setAutoDeploy] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
   const [req, setReq] = useState<ProjectRequest>();
@@ -52,6 +53,7 @@ export function NewProject() {
           description: description.trim() || undefined,
           testCommand: testCommand.trim() || undefined,
           buildCommand: buildCommand.trim() || undefined,
+          autoDeploy,
         }),
       );
     } catch (e) {
@@ -123,6 +125,15 @@ export function NewProject() {
         </Field>
       </div>
       <p className="text-xs text-muted">Agents can run the test and build commands without asking you, and reviews require them to pass.</p>
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" className="mt-1" checked={autoDeploy} onChange={(e) => setAutoDeploy(e.target.checked)} />
+        <span>
+          <span className="font-medium">▲ Auto-deploy to Vercel</span>
+          <span className="block text-xs text-muted">
+            When a job or chat in this project finishes, wdash deploys it to Vercel on its own and sends you the link. Agents can also deploy it without asking. Needs a Vercel token on the PC (see the README).
+          </span>
+        </span>
+      </label>
       <div className="flex items-center gap-3">
         <button className="btn btn-primary px-5 py-2" disabled={busy || !name.trim()}>
           {busy ? "Sending…" : "Create project"}

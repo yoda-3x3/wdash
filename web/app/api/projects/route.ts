@@ -42,7 +42,7 @@ export async function POST(req: Request) {
   const commands: ProjectConfig["commands"] = {};
   if (input.testCommand?.trim()) commands.test = input.testCommand.trim();
   if (input.buildCommand?.trim()) commands.build = input.buildCommand.trim();
-  const project = ProjectConfig.parse({ name: input.name, repo: created.repo, baseBranch: created.baseBranch, commands, defaultBudgetUsd: 2, cloud: true });
+  const project = ProjectConfig.parse({ name: input.name, repo: created.repo, baseBranch: created.baseBranch, commands, defaultBudgetUsd: 2, cloud: true, autoDeploy: input.autoDeploy });
   await redis().hset(K.projects, { [project.name]: JSON.stringify(project) });
   // Ask the PC to clone it and add it to projects.json whenever it's next on.
   const adopt = await createProjectRequest(input, created.repo);
