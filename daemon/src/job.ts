@@ -32,7 +32,7 @@ import * as G from "./git.js";
 import { clear, clearJob, raise } from "./notify.js";
 import { conflictingClaims, globsOverlap, inside, type PolicyContext } from "./permissions.js";
 import { OTHER_REPOS_DIR, openRepo, pushRepo } from "./otherRepos.js";
-import { vercelDeploy, vercelProjectName } from "./vercel.js";
+import { vercelConfigured, vercelDeploy, vercelProjectName } from "./vercel.js";
 import { chatPrompt, orchestratorPrompt, workerPrompt } from "./prompts.js";
 import type { Relay } from "./relay.js";
 
@@ -944,11 +944,33 @@ export class JobRunner implements AgentHost, TeamApi {
       await this.relay.r.zadd(K.mergeQueue, Date.now(), this.jobId);
       detail = `${summary}\n\nIt will merge into your PC's checkout when the PC is back online.`;
     }
+    const deployed = await this.autoDeploy();
+    if (deployed) detail += `\n\n${deployed}`;
     await this.relay.updateJob(this.jobId, { mergeState });
     await this.relay.setStatus(this.jobId, "done", { summary });
     await clearJob(this.relay, this.jobId, ["needs_merge"]);
     await this.notify("job_finished", { detail: truncate(detail, 600) });
     await this.end("done", false);
+  }
+
+  /** Auto-deploy projects: deploy the finished job branch to production. Never fails the job. */
+  private async autoDeploy(): Promise<string | undefined> {
+    if (!this.project.autoDeploy || this.scratch) return undefined;
+    if (!vercelConfigured()) {
+      await this.info("Auto-deploy is on for this project, but this runner has no Vercel token (VERCEL_TOKEN / WDASH_VERCEL_TOKEN). Skipped the deploy.");
+      return "Not deployed: no Vercel token on this runner.";
+    }
+    const name = vercelProjectName(this.project.name);
+    await this.info(`Deploying ${name} to Vercel…`);
+    try {
+      const url = await vercelDeploy(this.mainWt, name, true);
+      await this.info(`Deployed ${name} to Vercel: ${url}`);
+      return `Live on Vercel: ${url}`;
+    } catch (e) {
+      const msg = (e as Error).message;
+      await this.info(`Auto-deploy failed: ${msg}`);
+      return `Vercel deploy failed: ${truncate(msg, 300)}`;
+    }
   }
 
   // =====================================================================
@@ -1141,7 +1163,9 @@ export class JobRunner implements AgentHost, TeamApi {
     const name = vercelProjectName(project || fallback);
     const target = production ? "production" : "preview";
     const rule = `vercel_deploy:${name}:${target}`;
-    if (!(await this.relay.getAllowRules(this.jobId)).includes(rule)) {
+    // Auto-deploy projects deploy on their own; other repos and other names still ask.
+    const own = this.project.autoDeploy && !this.scratch && name === vercelProjectName(this.project.name);
+    if (!own && !(await this.relay.getAllowRules(this.jobId)).includes(rule)) {
       const ok = await this.requestPermission(
         a,
         "vercel_deploy",

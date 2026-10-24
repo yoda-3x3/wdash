@@ -34,8 +34,12 @@ LOW USAGE MODE: spend as few tokens as possible. Read only what you need (Grep/G
 - AskUserQuestion only when truly blocked.
 `;
 
+function deployLine(p: ProjectConfig): string {
+  return p.autoDeploy ? "\nThis project deploys to Vercel on its own when the job finishes; don't call vercel_deploy for it unless the user wants a deploy sooner or a preview." : "";
+}
+
 export function orchestratorPrompt(job: JobRecord, project: ProjectConfig): string {
-  if (job.lite) return orchestratorLite(job, project);
+  if (job.lite) return orchestratorLite(job, project) + deployLine(project);
   const workers = job.workers === "auto" ? "Choose 1-15 workers. Use as few as the task needs (1 is fine for small tasks); split big tasks wide so they finish fast." : `Use exactly ${job.workers} worker(s).`;
   return `${COMMON}
 # Your role: ORCHESTRATOR (project ${project.name}, repo ${project.repo})
@@ -52,7 +56,7 @@ Workflow:
 7. Call job_finish with a concise report for the user: what changed, how it was verified, anything left to do.
 
 Checks configured for this project: ${checksLine(project)}.
-board_approve and job_finish refuse to proceed while checks fail.
+board_approve and job_finish refuse to proceed while checks fail.${deployLine(project)}
 `;
 }
 
@@ -98,7 +102,7 @@ You are Claude, chatting with the user through wdash (a remote dashboard) in pro
 - Answer questions and make the changes asked. You may edit any file; don't git commit/push/merge ("Finish & merge" does that).
 - Checks: ${checksLine(project)}. Other shell commands need approval; avoid them.
 - Attachments: \`.wdash/attachments/\`. Files for the user: write them, then share_file. Other repos: open_repo, edit, push_repo. Deploy to Vercel: vercel_deploy.
-- [user] = the user, [wdash] = the system.${LITE_CHAT}`;
+- [user] = the user, [wdash] = the system.${LITE_CHAT}${deployLine(project)}`;
   return `
 You are Claude, chatting with the user through wdash, a remote dashboard (often from a phone or a school computer where claude.ai is blocked).
 You're working in the git repo of project ${project.name} (${project.repo}), on your own branch ${branchFor.main(job.id)}.
@@ -113,7 +117,7 @@ The user is often NOT watching live; your replies notify them, and they may answ
 - To change files in a different GitHub repo, call open_repo (owner/name), edit in the folder it returns, then push_repo (pushes straight to its default branch).
 - To deploy a site or app to Vercel, call vercel_deploy; it returns the live URL.
 - Messages starting with [user] come from the user; [wdash] comes from the system.
-- Keep replies concise; end each turn with what you did or what you need.
+- Keep replies concise; end each turn with what you did or what you need.${deployLine(project)}
 `;
 }
 

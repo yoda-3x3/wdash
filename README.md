@@ -85,7 +85,9 @@ Agents can deploy what they build with the `vercel_deploy` tool: say "deploy it"
 1. Create a token at [vercel.com/account/tokens](https://vercel.com/account/tokens) and give it to `scripts/setup.mjs` (or put `VERCEL_TOKEN=` in `daemon/.env`). Add `VERCEL_SCOPE=<team-slug>` to deploy to a team instead of your personal account.
 2. For cloud runs, run `node daemon/dist/main.js setup-cloud` again (or add `WDASH_VERCEL_TOKEN` / `WDASH_VERCEL_SCOPE` as Actions secrets).
 
-Each deploy asks you first, unless auto mode is on or you allowed that project for the whole job. Agents' own shell commands never see the token.
+**Auto-deploy:** projects with `"autoDeploy": true` deploy on their own. Whenever a job or chat in one finishes, wdash deploys the finished branch to Vercel production and puts the link in the "finished" notification. Agents can also deploy it without asking. Projects you create on the website have it on by default (there's a checkbox on the New project form). For existing projects, add `"autoDeploy": true` to the project in `daemon/config/projects.json`. A failed deploy is reported in the timeline and doesn't fail the job.
+
+Other deploys (another repo, or a project without auto-deploy) ask you first, unless auto mode is on or you allowed that project for the whole job. Agents' own shell commands never see the token.
 
 ---
 
