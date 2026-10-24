@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import type { SDKResultMessage, McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk";
 import type { Redis } from "ioredis";
 import {
@@ -31,7 +31,8 @@ import { env } from "./config.js";
 import * as G from "./git.js";
 import { clear, clearJob, raise } from "./notify.js";
 import { conflictingClaims, globsOverlap, inside, type PolicyContext } from "./permissions.js";
-import { openRepo, pushRepo } from "./otherRepos.js";
+import { OTHER_REPOS_DIR, openRepo, pushRepo } from "./otherRepos.js";
+import { vercelDeploy, vercelProjectName } from "./vercel.js";
 import { chatPrompt, orchestratorPrompt, workerPrompt } from "./prompts.js";
 import type { Relay } from "./relay.js";
 
@@ -1127,6 +1128,34 @@ export class JobRunner implements AgentHost, TeamApi {
     const out = await pushRepo(a.cwd, repo, message);
     await this.relay.emit({ jobId: this.jobId, agentId: fromId, type: "info", payload: { text: out } });
     return out;
+  }
+
+  async vercelDeploy(fromId: string, path: string, project: string | undefined, production: boolean): Promise<string> {
+    const a = this.agents.get(fromId);
+    if (!a) throw new Error("unknown agent");
+    const dir = resolve(a.cwd, path);
+    if (!inside(a.cwd, dir)) throw new Error(`${path} is outside your working directory.`);
+    // A repo opened with open_repo deploys under its own name, not the job's project.
+    const opened = relative(join(a.cwd, OTHER_REPOS_DIR), dir).split(/[\\/]/)[0];
+    const fallback = opened && !opened.startsWith("..") ? opened.split("__").pop()! : this.scratch ? this.job.title : this.project.name;
+    const name = vercelProjectName(project || fallback);
+    const target = production ? "production" : "preview";
+    const rule = `vercel_deploy:${name}:${target}`;
+    if (!(await this.relay.getAllowRules(this.jobId)).includes(rule)) {
+      const ok = await this.requestPermission(
+        a,
+        "vercel_deploy",
+        { path, project: name, production },
+        `Deploy ${path === "." ? "this repo" : path} to Vercel (${name}, ${target})`,
+        rule,
+        new AbortController().signal,
+      );
+      if (!ok.allow) throw new Error(ok.message ? `User denied the deploy: ${ok.message}` : "User denied the deploy.");
+    }
+    await this.relay.emit({ jobId: this.jobId, agentId: fromId, type: "info", payload: { text: `${fromId} is deploying ${name} to Vercel (${target})…` } });
+    const url = await vercelDeploy(dir, name, production);
+    await this.relay.emit({ jobId: this.jobId, agentId: fromId, type: "info", payload: { text: `Deployed ${name} to Vercel: ${url}` } });
+    return `Deployed ${name} (${target}): ${url}`;
   }
 
   async shareFile(fromId: string, path: string, note?: string): Promise<string> {

@@ -168,6 +168,13 @@ for (const o of otherOwners) {
     delete state[key];
   }
 }
+// Optional: agents' vercel_deploy tool.
+const vercelTok = await ask("Vercel token so agents can deploy sites (https://vercel.com/account/tokens; Enter to skip)", { def: state.VERCEL_TOKEN, secret: true });
+if (vercelTok) {
+  state.VERCEL_TOKEN = vercelTok;
+  state.VERCEL_SCOPE = await ask("Vercel team slug to deploy to (Enter for your personal account)", { def: state.VERCEL_SCOPE });
+  save();
+}
 rl.close();
 
 // ---------------------------------------------------------------- write local env files
@@ -182,6 +189,8 @@ writeFileSync(
     `VAPID_PUBLIC_KEY=${state.VAPID_PUBLIC_KEY}`,
     `VAPID_PRIVATE_KEY=${state.VAPID_PRIVATE_KEY}`,
     `VAPID_SUBJECT=mailto:${login}@users.noreply.github.com`,
+    ...(state.VERCEL_TOKEN ? [`VERCEL_TOKEN=${state.VERCEL_TOKEN}`] : []),
+    ...(state.VERCEL_SCOPE ? [`VERCEL_SCOPE=${state.VERCEL_SCOPE}`] : []),
     "",
   ].join("\n"),
 );
@@ -226,6 +235,8 @@ const repoSecrets = {
   WDASH_WEB_URL: webUrl,
   // Needed because the wdash repo is private: lets the runner check out wdash.
   WDASH_REPO_TOKEN: state.GITHUB_DISPATCH_TOKEN,
+  ...(state.VERCEL_TOKEN ? { WDASH_VERCEL_TOKEN: state.VERCEL_TOKEN } : {}),
+  ...(state.VERCEL_SCOPE ? { WDASH_VERCEL_SCOPE: state.VERCEL_SCOPE } : {}),
 };
 for (const repo of repoList) {
   const other = repo.split("/")[0].toLowerCase() !== wdashOwner;

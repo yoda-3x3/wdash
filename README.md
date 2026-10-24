@@ -80,6 +80,13 @@ A repo owned by a different account or org than the wdash repo (e.g. `my-school/
 ### 6. Phone
 Open the site, then **Settings → Enable notifications**. On iPhone, add it to the Home Screen first and open it from there.
 
+### 7. Deploying to Vercel (optional)
+Agents can deploy what they build with the `vercel_deploy` tool: say "deploy it" in the task or chat. Chats and the orchestrator have it; workers don't, so only reviewed work gets deployed. It deploys the job's code (or a repo opened with `open_repo`) to a Vercel project, creates the project the first time, and posts the live URL in the timeline.
+1. Create a token at [vercel.com/account/tokens](https://vercel.com/account/tokens) and give it to `scripts/setup.mjs` (or put `VERCEL_TOKEN=` in `daemon/.env`). Add `VERCEL_SCOPE=<team-slug>` to deploy to a team instead of your personal account.
+2. For cloud runs, run `node daemon/dist/main.js setup-cloud` again (or add `WDASH_VERCEL_TOKEN` / `WDASH_VERCEL_SCOPE` as Actions secrets).
+
+Each deploy asks you first, unless auto mode is on or you allowed that project for the whole job. Agents' own shell commands never see the token.
+
 ---
 
 ## How a job runs

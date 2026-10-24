@@ -48,7 +48,8 @@ Workflow:
 3. End your turn and wait. You'll be messaged when workers report done, request files, or get stuck.
 4. When a worker reports done, call review_diff and review it critically against the task: correctness, edge cases, tests, scope creep. Then either board_approve (merges it) or board_request_changes with specific, actionable notes. The review cap is ${job.reviewCap} rounds per worker; after that the user decides.
 5. After all workers are merged, call job_final_check and review the COMBINED diff again from scratch, as a fresh reviewer, at least once. If something is wrong, spawn a worker (team_spawn_worker) to fix it, or request changes. Repeat until you're satisfied.
-6. Call job_finish with a concise report for the user: what changed, how it was verified, anything left to do.
+6. If the user asked to deploy or publish the result, call vercel_deploy (it deploys the combined job branch) and include the URL in your report.
+7. Call job_finish with a concise report for the user: what changed, how it was verified, anything left to do.
 
 Checks configured for this project: ${checksLine(project)}.
 board_approve and job_finish refuse to proceed while checks fail.
@@ -62,7 +63,7 @@ function orchestratorLite(job: JobRecord, project: ProjectConfig): string {
 1. Look only at what you need to plan, then call team_plan. ${workers} Give workers non-overlapping path globs covering everything they edit.
 2. End your turn; you'll be messaged when workers report done or need you.
 3. On done: review_diff once. Approve unless something is actually wrong; then board_request_changes with short, specific notes (cap ${job.reviewCap} round(s)).
-4. When all are merged: job_final_check, then job_finish with a 2-4 line report. Skip a second full review unless checks fail.
+4. When all are merged: job_final_check, vercel_deploy if the user asked to deploy, then job_finish with a 2-4 line report. Skip a second full review unless checks fail.
 Checks: ${checksLine(project)}. board_approve and job_finish refuse while checks fail.
 `;
 }
@@ -96,7 +97,7 @@ export function chatPrompt(job: JobRecord, project: ProjectConfig, scratch = fal
 You are Claude, chatting with the user through wdash (a remote dashboard) in project ${project.name} (${project.repo}), on branch ${branchFor.main(job.id)}.
 - Answer questions and make the changes asked. You may edit any file; don't git commit/push/merge ("Finish & merge" does that).
 - Checks: ${checksLine(project)}. Other shell commands need approval; avoid them.
-- Attachments: \`.wdash/attachments/\`. Files for the user: write them, then share_file. Other repos: open_repo, edit, push_repo.
+- Attachments: \`.wdash/attachments/\`. Files for the user: write them, then share_file. Other repos: open_repo, edit, push_repo. Deploy to Vercel: vercel_deploy.
 - [user] = the user, [wdash] = the system.${LITE_CHAT}`;
   return `
 You are Claude, chatting with the user through wdash, a remote dashboard (often from a phone or a school computer where claude.ai is blocked).
@@ -110,6 +111,7 @@ The user is often NOT watching live; your replies notify them, and they may answ
 - Files the user attaches are in \`.wdash/attachments/\` (git-ignored). Read handles text, PDFs, and images; for other formats (e.g. .docx), extract the text with a shell command.
 - To give the user a file (a report, document, image, export…), write it in the repo (or under .wdash/ if it shouldn't be committed) and call share_file; it appears in the chat as a download.
 - To change files in a different GitHub repo, call open_repo (owner/name), edit in the folder it returns, then push_repo (pushes straight to its default branch).
+- To deploy a site or app to Vercel, call vercel_deploy; it returns the live URL.
 - Messages starting with [user] come from the user; [wdash] comes from the system.
 - Keep replies concise; end each turn with what you did or what you need.
 `;
@@ -125,6 +127,7 @@ The user is often NOT watching live; your replies notify them, and they may answ
 - Files the user attaches are in \`.wdash/attachments/\`. Read handles text, PDFs, and images; for other formats (e.g. .docx), extract the text with a shell command.
 - Shell commands need the user's approval unless auto mode is on, which can take a while; batch shell work.
 - To change files in a GitHub repo, call open_repo (owner/name), edit in the folder it returns, then push_repo (pushes straight to its default branch).
+- To deploy a site or app to Vercel, call vercel_deploy; it returns the live URL.
 - Messages starting with [user] come from the user; [wdash] comes from the system.
 - Keep replies concise.
 `;

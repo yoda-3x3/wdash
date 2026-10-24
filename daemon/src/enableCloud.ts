@@ -100,6 +100,8 @@ export async function setupCloud(): Promise<string[]> {
     WDASH_VAPID_PRIVATE_KEY: e.VAPID_PRIVATE_KEY,
     WDASH_WEB_URL: e.WDASH_WEB_URL,
     WDASH_PROJECTS_TOKEN: setup.GITHUB_DISPATCH_TOKEN,
+    WDASH_VERCEL_TOKEN: process.env.VERCEL_TOKEN,
+    WDASH_VERCEL_SCOPE: process.env.VERCEL_SCOPE,
   };
   const log: string[] = [];
   for (const [k, v] of Object.entries(secrets)) {
