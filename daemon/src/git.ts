@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import { branchFor } from "@wdash/shared";
@@ -85,10 +85,30 @@ export async function baseRef(repo: string, baseBranch: string, mode: "home" | "
   return "HEAD";
 }
 
+/** Never committed by checkpoints: installs and build output are huge and break pushes. */
+export const NEVER_COMMIT = ["/.wdash/", "node_modules/", ".next/"];
+/** GitHub rejects a whole push if any file is over 100 MB. */
+const MAX_FILE_BYTES = 95 * 1024 * 1024;
+
+/** The useful part of a git failure: the last lines of stderr, not the (long) command line. */
+export function gitErrorTail(e: unknown, lines = 4): string {
+  const err = e as Partial<GitError> & Error;
+  const text = (err.stderr || err.message || String(e)).trim();
+  return text.split("\n").filter(Boolean).slice(-lines).join(" | ").slice(0, 500);
+}
+
 /** WIP commit of everything in the worktree. Returns the new sha, or undefined if nothing changed. */
 export async function checkpointCommit(worktree: string, message: string): Promise<string | undefined> {
   await git(worktree, "add", "-A");
-  const staged = await git(worktree, "diff", "--cached", "--name-only");
+  let staged = await git(worktree, "diff", "--cached", "--name-only", "--diff-filter=AM");
+  for (const f of staged.split("\n").filter(Boolean)) {
+    const p = join(worktree, f);
+    if (existsSync(p) && statSync(p).size > MAX_FILE_BYTES) {
+      await git(worktree, "rm", "--cached", "--quiet", "--", f);
+      await excludeFromGit(worktree, `/${f}`);
+    }
+  }
+  staged = await git(worktree, "diff", "--cached", "--name-only");
   if (!staged) return undefined;
   await git(worktree, "commit", "-m", message);
   return git(worktree, "rev-parse", "HEAD");
@@ -97,6 +117,22 @@ export async function checkpointCommit(worktree: string, message: string): Promi
 export async function pushBranches(repo: string, branches: string[]): Promise<void> {
   if (!branches.length) return;
   await git(repo, "push", "origin", ...branches.map((b) => `refs/heads/${b}:refs/heads/${b}`));
+}
+
+/**
+ * Push branches one at a time, so one bad branch (GitHub rejects the whole push if any file is too big)
+ * doesn't keep the others from being saved. Returns the branches that failed, with the reason.
+ */
+export async function pushEach(repo: string, branches: string[]): Promise<Array<{ branch: string; why: string }>> {
+  const failed: Array<{ branch: string; why: string }> = [];
+  for (const b of branches) {
+    try {
+      await git(repo, "push", "origin", `refs/heads/${b}:refs/heads/${b}`);
+    } catch (e) {
+      failed.push({ branch: b, why: gitErrorTail(e, 3) });
+    }
+  }
+  return failed;
 }
 
 /** Push the PC checkout's base branch to GitHub after a merge. Returns an error message instead of throwing. */

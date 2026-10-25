@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, truncateSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { branchFor, safeFileName, uniqueFileName } from "@wdash/shared";
@@ -174,4 +174,23 @@ test("a finished job merges on GitHub when the PC checkout can't take it, and th
   const later = await G.syncIntoCheckout(home, "main", job);
   assert.equal(later.kind, "merged");
   assert.equal(await G.git(home, "rev-parse", "main"), await G.git(home, "rev-parse", "origin/main"));
+});
+
+test("checkpoints never commit node_modules, .next, or files too big for GitHub", async () => {
+  const { root, home } = await setup();
+  const wt = await G.addWorktree(home, join(root, "wt", "big"), branchFor.main("jbig"), "main");
+  for (const p of G.NEVER_COMMIT) await G.excludeFromGit(home, p);
+  mkdirSync(join(wt, "node_modules", "x"), { recursive: true });
+  writeFileSync(join(wt, "node_modules", "x", "index.js"), "x\n");
+  mkdirSync(join(wt, ".next"), { recursive: true });
+  writeFileSync(join(wt, ".next", "build"), "b\n");
+  writeFileSync(join(wt, "huge.bin"), "");
+  truncateSync(join(wt, "huge.bin"), 96 * 1024 * 1024); // sparse, so the test stays fast
+  writeFileSync(join(wt, "app.ts"), "ok\n");
+  assert.ok(await G.checkpointCommit(wt, "wip"));
+  assert.deepEqual((await G.git(wt, "show", "--name-only", "--format=", "HEAD")).split("\n"), ["app.ts"]);
+  // The big file stays out of later checkpoints too.
+  writeFileSync(join(wt, "app.ts"), "ok2\n");
+  await G.checkpointCommit(wt, "wip2");
+  assert.deepEqual((await G.git(wt, "show", "--name-only", "--format=", "HEAD")).split("\n"), ["app.ts"]);
 });

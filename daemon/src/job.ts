@@ -161,7 +161,7 @@ export class JobRunner implements AgentHost, TeamApi {
     if (this.mode === "cloud") await G.fetchAll(this.repoDir);
     const base = await G.baseRef(this.repoDir, this.project.baseBranch, this.mode);
     this.mainWt = await G.addWorktree(this.repoDir, this.wtPath("main"), branchFor.main(this.jobId), base);
-    await G.excludeFromGit(this.repoDir, "/.wdash/");
+    for (const p of G.NEVER_COMMIT) await G.excludeFromGit(this.repoDir, p);
     await this.syncAttachments(this.mainWt);
     await G.pushBranches(this.repoDir, [branchFor.main(this.jobId)]).catch(async (e) => {
       await this.info(`Couldn't push job branch yet (${(e as Error).message.slice(0, 200)}). Cloud failover needs it pushed.`);
@@ -1115,9 +1115,13 @@ export class JobRunner implements AgentHost, TeamApi {
     const sha = await G.head(this.mainWt);
     try {
       await G.pushBranches(this.repoDir, branches);
-    } catch (e) {
-      await this.info(`Checkpoint push failed: ${(e as Error).message.slice(0, 300)}`);
-      return;
+    } catch {
+      // Retry one by one so the good branches still get saved, and report why the others failed.
+      const failed = await G.pushEach(this.repoDir, branches);
+      if (failed.length) {
+        await this.info(`Checkpoint push failed for ${failed.map((f) => `${f.branch.split("/").pop()}: ${f.why}`).join("; ")}`.slice(0, 1500));
+        return;
+      }
     }
     await this.relay.updateJob(this.jobId, { lastCheckpointSha: sha });
     await this.relay.emit({ jobId: this.jobId, type: "checkpoint", payload: { sha, why, branches } });
