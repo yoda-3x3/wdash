@@ -140,3 +140,38 @@ test("push_repo commits an opened repo and pushes to its default branch", async 
   assert.match(await pushRepo(cwd, "me/other", "again"), /Nothing new/);
   await assert.rejects(pushRepo(cwd, "me/missing", "x"), /isn't open/);
 });
+
+test("a finished job merges on GitHub when the PC checkout can't take it, and the PC catches up later", async () => {
+  const { root, origin, home } = await setup();
+  const job = "j9";
+  const main = await G.addWorktree(home, join(root, "wt", "main"), branchFor.main(job), "main");
+  writeFileSync(join(main, "job.txt"), "job\n");
+  await G.checkpointCommit(main, "job work");
+
+  // Someone else moved GitHub's main ahead meanwhile.
+  const other = join(root, "other");
+  await G.git(root, "clone", "-c", "core.autocrlf=false", origin, other);
+  for (const [k, v] of [["user.name", "t"], ["user.email", "t@t"]]) await G.git(other, "config", k, v);
+  writeFileSync(join(other, "c.txt"), "elsewhere\n");
+  await G.git(other, "add", "-A");
+  await G.git(other, "commit", "-m", "remote change");
+  await G.git(other, "push", "origin", "main");
+
+  // The PC checkout has uncommitted edits, so it can't take the merge.
+  writeFileSync(join(home, "a.txt"), "dirty\n");
+  await G.pushBranches(home, [branchFor.main(job)]);
+  const local = await G.syncIntoCheckout(home, "main", job);
+  assert.equal(local.kind, "needs_merge");
+
+  const out = await G.mergeOnGitHub(main, "main");
+  assert.equal(out.kind, "merged");
+  await G.git(other, "pull", "--ff-only");
+  assert.equal(readFileSync(join(other, "job.txt"), "utf8"), "job\n");
+  assert.equal(readFileSync(join(other, "c.txt"), "utf8"), "elsewhere\n");
+
+  // Once the checkout is clean, syncing fast-forwards it to GitHub's main.
+  await G.git(home, "checkout", "--", "a.txt");
+  const later = await G.syncIntoCheckout(home, "main", job);
+  assert.equal(later.kind, "merged");
+  assert.equal(await G.git(home, "rev-parse", "main"), await G.git(home, "rev-parse", "origin/main"));
+});

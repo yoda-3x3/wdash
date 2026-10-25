@@ -125,15 +125,23 @@ export async function syncFinishedJobs(relay: Relay, projects: ProjectConfig[]):
   const ids = await relay.r.zrange(K.mergeQueue, "0", "-1");
   for (const id of ids) {
     const job = await relay.getJob(id);
-    if (!job || job.mergeState !== "pending") {
+    if (!job || (job.mergeState !== "pending" && job.mergeState !== "merged")) {
       await relay.r.zrem(K.mergeQueue, id);
       continue;
     }
     const project = projects.find((p) => p.name === job.project);
-    if (!project?.localPath) continue;
+    if (!project?.localPath) {
+      if (job.mergeState === "merged") await relay.r.zrem(K.mergeQueue, id); // nothing on the PC to update
+      continue;
+    }
     const out = await syncIntoCheckout(project.localPath, project.baseBranch, id);
     if (out.kind === "missing") continue; // not pushed yet; try again later
     await relay.r.zrem(K.mergeQueue, id);
+    if (job.mergeState === "merged") {
+      // Already merged on GitHub; this only brought the PC checkout up to date (if it was clean).
+      if (out.kind === "merged") await relay.emit({ jobId: id, type: "info", payload: { text: `Your PC's ${project.baseBranch} is up to date with it (${out.sha.slice(0, 8)}).` } });
+      continue;
+    }
     if (out.kind === "merged") {
       await relay.updateJob(id, { mergeState: "merged" });
       await relay.emit({ jobId: id, type: "info", payload: { text: `Merged into ${project.baseBranch} on your PC (${out.sha.slice(0, 8)}).` } });

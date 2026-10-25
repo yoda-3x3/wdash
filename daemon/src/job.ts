@@ -937,12 +937,29 @@ export class JobRunner implements AgentHost, TeamApi {
           await this.info(err ? `Couldn't push ${this.project.baseBranch} to GitHub: ${err}` : `Pushed ${this.project.baseBranch} to GitHub (${this.project.repo}).`);
         }
       } else if (out.kind === "needs_merge") {
-        mergeState = "needs_merge";
-        await this.notify("needs_merge", { detail: `${out.why}${out.conflicts?.length ? ` Conflicts: ${out.conflicts.join(", ")}` : ""}` });
+        // The PC checkout can't take it; merge on GitHub instead so nobody has to open a PR.
+        const gh = this.project.pushOnMerge ? await this.mergeOnGitHub() : out;
+        if (gh.kind === "merged") {
+          mergeState = "merged";
+          detail = `${summary}\n\nMerged into ${this.project.baseBranch} on GitHub. Your PC checkout was left alone: ${out.why}`;
+        } else if (gh.kind === "needs_merge") {
+          mergeState = "needs_merge";
+          await this.notify("needs_merge", { detail: `${gh.why}${gh.conflicts?.length ? ` Conflicts: ${gh.conflicts.join(", ")}` : ""}` });
+        }
       }
     } else {
+      const gh = this.project.pushOnMerge ? await this.mergeOnGitHub() : undefined;
+      if (gh?.kind === "merged") {
+        mergeState = "merged";
+        detail = `${summary}\n\nMerged into ${this.project.baseBranch} on GitHub.`;
+      } else if (gh?.kind === "needs_merge") {
+        mergeState = "needs_merge";
+        await this.notify("needs_merge", { detail: `${gh.why}${gh.conflicts?.length ? ` Conflicts: ${gh.conflicts.join(", ")}` : ""}` });
+      } else {
+        detail = `${summary}\n\nIt will merge into your PC's checkout when the PC is back online.`;
+      }
+      // Either way the PC checkout catches up (or merges) when the PC is next online.
       await this.relay.r.zadd(K.mergeQueue, Date.now(), this.jobId);
-      detail = `${summary}\n\nIt will merge into your PC's checkout when the PC is back online.`;
     }
     const deployed = await this.autoDeploy();
     if (deployed) detail += `\n\n${deployed}`;
@@ -951,6 +968,16 @@ export class JobRunner implements AgentHost, TeamApi {
     await clearJob(this.relay, this.jobId, ["needs_merge"]);
     await this.notify("job_finished", { detail: truncate(detail, 600) });
     await this.end("done", false);
+  }
+
+  private async mergeOnGitHub(): Promise<G.SyncOutcome> {
+    const out = await G.mergeOnGitHub(this.mainWt, this.project.baseBranch);
+    await this.info(
+      out.kind === "merged"
+        ? `Merged into ${this.project.baseBranch} on GitHub (${this.project.repo}, ${out.sha.slice(0, 8)}).`
+        : `Couldn't merge on GitHub: ${out.kind === "needs_merge" ? out.why : "job branch missing"} The work is on branch ${branchFor.main(this.jobId)}.`,
+    );
+    return out;
   }
 
   /** Auto-deploy projects: deploy the finished job branch to production. Never fails the job. */

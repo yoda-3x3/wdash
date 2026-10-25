@@ -96,7 +96,7 @@ Other deploys (another repo, or a project without auto-deploy) ask you first, un
 2. The **orchestrator** (Opus by default) explores the repo and submits a plan that splits the work across workers, each owning non-overlapping file globs. Plans with 3+ workers wait for your approval.
 3. **Workers** (Sonnet by default) each get their own git worktree. Editing a file you don't own is blocked; workers request files through the board.
 4. When a worker reports done, the checks run and the orchestrator reviews the diff, approving it or sending it back (up to the review cap, then it asks you). Approved work merges into `wdash/<job>/main`.
-5. After a final combined review and checks, the orchestrator finishes with a report. At home the branch merges into your checkout if that's clean; otherwise you get a "needs merge" card. Cloud jobs merge when the PC comes back.
+5. After a final combined review and checks, the orchestrator finishes with a report. At home the branch merges into your checkout if that's clean. Otherwise, and for cloud jobs, wdash merges it into the base branch on GitHub directly (no pull request), and the PC checkout fast-forwards the next time it's clean. You only get a "needs merge" card for real conflicts with the base branch, or for projects with `"pushOnMerge": false`.
 6. **Checkpoints**: after every turn and every 5 minutes, all job branches are pushed and transcripts are mirrored to Redis. If the PC disappears, a cloud runner resumes the same sessions from the last checkpoint.
 
 **The wall** (`/wall`) shows every live agent across all jobs as a streaming terminal tile. Tiles that need you glow amber with their buttons inline. Use fullscreen on a spare monitor.

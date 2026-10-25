@@ -171,6 +171,8 @@ export async function syncIntoCheckout(localPath: string, baseBranch: string, jo
   if (current !== baseBranch) return { kind: "needs_merge", why: `Your checkout is on '${current}', not '${baseBranch}'.` };
   const dirty = await git(localPath, "status", "--porcelain", "--untracked-files=no");
   if (dirty) return { kind: "needs_merge", why: "Your checkout has uncommitted changes." };
+  // Pick up jobs that were merged on GitHub while the PC couldn't take them (mergeOnGitHub).
+  if (await refExists(localPath, `refs/remotes/origin/${baseBranch}`)) await tryGit(localPath, "merge", "--ff-only", `origin/${baseBranch}`);
 
   try {
     await git(localPath, "merge", "--no-edit", branch);
@@ -180,4 +182,29 @@ export async function syncIntoCheckout(localPath: string, baseBranch: string, jo
     await tryGit(localPath, "merge", "--abort");
     return { kind: "needs_merge", why: "Merge conflicts with your local branch.", conflicts };
   }
+}
+
+/**
+ * Merge a finished job into the base branch on GitHub, with no PR and no PC checkout: merge origin/<base>
+ * into the job worktree, then push it as the new base (a fast-forward). Used for cloud jobs and when the
+ * PC checkout can't take the merge. Retries if someone else pushed in between.
+ */
+export async function mergeOnGitHub(worktree: string, baseBranch: string): Promise<SyncOutcome> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await tryGit(worktree, "fetch", "origin", baseBranch);
+    if (await refExists(worktree, `refs/remotes/origin/${baseBranch}`)) {
+      const res = await mergeInto(worktree, `origin/${baseBranch}`, `wdash: merge ${baseBranch} into job branch`);
+      if (!res.ok) return { kind: "needs_merge", why: `Merge conflicts with ${baseBranch} on GitHub.`, conflicts: res.conflicts };
+    }
+    try {
+      await git(worktree, "push", "origin", `HEAD:refs/heads/${baseBranch}`);
+      return { kind: "merged", sha: await head(worktree) };
+    } catch (e) {
+      const msg = (e as GitError).stderr || (e as Error).message;
+      if (!/rejected|non-fast-forward|fetch first/i.test(msg)) {
+        return { kind: "needs_merge", why: `Couldn't push to ${baseBranch} on GitHub: ${msg.trim().split("\n").slice(-2).join(" ").slice(0, 300)}` };
+      }
+    }
+  }
+  return { kind: "needs_merge", why: `${baseBranch} on GitHub kept changing while merging; try again.` };
 }
