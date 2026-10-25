@@ -33,9 +33,13 @@ export async function openRepo(cwd: string, repo: string): Promise<string> {
     } else {
       mkdirSync(join(cwd, OTHER_REPOS_DIR), { recursive: true });
       await git(cwd, "clone", "--depth", "50", remote(repo), dir);
-      if (!(await git(dir, "config", "user.email").catch(() => ""))) {
-        await git(dir, "config", "user.name", "wdash");
-        await git(dir, "config", "user.email", "wdash@users.noreply.github.com");
+      // Cloud runners set a global identity; this is a last resort. Use the owner's own noreply address so
+      // GitHub and Vercel credit the account (Vercel Hobby blocks deploys of commits by other authors).
+      const owner = process.env.GITHUB_REPOSITORY_OWNER ?? repo.split("/")[0];
+      if (!(await git(dir, "config", "user.email").catch(() => "")) && owner) {
+        const id = process.env.GITHUB_REPOSITORY_OWNER_ID;
+        await git(dir, "config", "user.name", owner);
+        await git(dir, "config", "user.email", `${id ? `${id}+` : ""}${owner}@users.noreply.github.com`);
       }
     }
   } catch (e) {

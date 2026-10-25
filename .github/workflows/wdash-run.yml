@@ -75,8 +75,9 @@ jobs:
       - name: Git identity
         working-directory: project
         run: |
-          git config user.name "wdash"
-          git config user.email "wdash@users.noreply.github.com"
+          git config --global user.name "${{ github.repository_owner }}"
+          # The owner's own noreply address, so GitHub and Vercel (Hobby blocks other authors) credit the account.
+          git config --global user.email "${{ github.repository_owner_id }}+${{ github.repository_owner }}@users.noreply.github.com"
 
       - name: Run job
         env:
