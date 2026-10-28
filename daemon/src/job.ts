@@ -29,7 +29,7 @@ import { chatServer, leadServer, orchestratorServer, workerServer, type PlannedW
 import { runChecks, type CheckResult } from "./checks.js";
 import { env } from "./config.js";
 import * as G from "./git.js";
-import { ensureKaggleServer, isKaggleModel } from "./kaggle.js";
+import { ensureKaggleModel, ensureKaggleServer, isKaggleModel } from "./kaggle.js";
 import { clear, clearJob, raise } from "./notify.js";
 import { conflictingClaims, globsOverlap, inside, type PolicyContext } from "./permissions.js";
 import { OTHER_REPOS_DIR, openRepo, pushRepo } from "./otherRepos.js";
@@ -170,7 +170,8 @@ export class JobRunner implements AgentHost, TeamApi {
 
       await this.prepareMain();
       if (this.job.kind === "chat" ? isKaggleModel(this.job.chatModel) : this.job.models === "kaggle") {
-        await ensureKaggleServer(this.relay, (text) => this.info(text));
+        const server = await ensureKaggleServer(this.relay, (text) => this.info(text));
+        if (this.job.kaggleModel) await ensureKaggleModel(server, this.job.kaggleModel, (text) => this.info(text));
       }
       const existing = await this.relay.getAgents(this.jobId);
       if (existing.length) await this.resumeAgents(existing);
@@ -215,7 +216,7 @@ export class JobRunner implements AgentHost, TeamApi {
     const rec: AgentRecord = {
       id: this.lead,
       role: "orchestrator",
-      model: preset.orchestrator,
+      model: this.modelFor(preset.orchestrator),
       name: "orchestrator",
       task: this.job.task,
       globs: [],
@@ -237,7 +238,7 @@ export class JobRunner implements AgentHost, TeamApi {
     const rec: AgentRecord = {
       id: CHAT_AGENT,
       role: "chat",
-      model: this.job.chatModel,
+      model: this.modelFor(this.job.chatModel),
       name: CHAT_AGENT,
       task: this.job.task,
       globs: ["**"],
@@ -329,6 +330,11 @@ export class JobRunner implements AgentHost, TeamApi {
     }
     const status = this.job.status === "awaiting_plan_approval" ? "awaiting_plan_approval" : "running";
     await this.relay.setStatus(this.jobId, status);
+  }
+
+  /** "kaggle" becomes "kaggle:<model>" when the job picked a Kaggle model. */
+  private modelFor(model: string): string {
+    return model === "kaggle" && this.job.kaggleModel ? `kaggle:${this.job.kaggleModel}` : model;
   }
 
   private makeRunner(rec: AgentRecord, cwd: string, systemAppend: string): AgentRunner {
@@ -814,7 +820,7 @@ export class JobRunner implements AgentHost, TeamApi {
     const rec: AgentRecord = {
       id: w.name,
       role,
-      model: role === "lead" ? preset.lead : preset.worker,
+      model: this.modelFor(role === "lead" ? preset.lead : preset.worker),
       name: w.name,
       task: w.task,
       globs: w.globs,

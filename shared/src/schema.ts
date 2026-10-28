@@ -65,7 +65,7 @@ export const RunOn = z.enum(["auto", "home", "cloud"]);
 
 export const MergeState = z.enum(["none", "pending", "merged", "needs_merge", "left_as_branch", "discarded"]);
 
-export const ModelPreset = z.enum(["opus-sonnet", "opus-opus", "sonnet-haiku", "kaggle"]);
+export const ModelPreset = z.enum(["opus-sonnet", "opus-opus", "sonnet-haiku", "opus-sonnet-haiku", "kaggle"]);
 export type ModelPreset = z.infer<typeof ModelPreset>;
 
 /** `lead`: the middle tier in a 3-tier team (orchestrator -> leads -> workers). */
@@ -73,9 +73,30 @@ export const MODEL_PRESETS: Record<ModelPreset, { orchestrator: string; lead: st
   "opus-sonnet": { orchestrator: "opus", lead: "sonnet", worker: "sonnet", label: "Opus orchestrator + Sonnet workers" },
   "opus-opus": { orchestrator: "opus", lead: "opus", worker: "opus", label: "Opus everywhere" },
   "sonnet-haiku": { orchestrator: "sonnet", lead: "sonnet", worker: "haiku", label: "Sonnet orchestrator + Haiku workers" },
+  "opus-sonnet-haiku": { orchestrator: "opus", lead: "sonnet", worker: "haiku", label: "Opus orchestrator + Haiku workers" },
   // Open model on the free Kaggle GPU server (daemon/src/kaggle.ts). PC only.
   kaggle: { orchestrator: "kaggle", lead: "kaggle", worker: "kaggle", label: "Kaggle GPU (open model, free, PC only)" },
 };
+
+const tierName = (m: string) => m[0]!.toUpperCase() + m.slice(1);
+
+/** A preset's label for a team shape: 3-tier teams name the lead tier too. */
+export function presetLabel(preset: ModelPreset, shape: TeamShape): string {
+  const p = MODEL_PRESETS[preset];
+  if (shape !== "three-tier" || preset === "kaggle") return p.label;
+  return `${tierName(p.orchestrator)} orchestrator → ${tierName(p.lead)} leads → ${tierName(p.worker)} workers`;
+}
+
+/** Open models offered for the Kaggle server (2x T4, 32 GB). The daemon pulls one on first use. The first is the default. */
+export const KAGGLE_MODELS: Array<{ id: string; label: string }> = [
+  { id: "qwen3.8:27b", label: "Qwen 3.8 27B (best, tested)" },
+  { id: "qwen3.6:35b", label: "Qwen 3.6 35B MoE (faster)" },
+  { id: "qwen3.6:27b", label: "Qwen 3.6 27B" },
+  { id: "gpt-oss:20b", label: "gpt-oss 20B (fastest)" },
+  { id: "qwen3-coder:30b", label: "Qwen3 Coder 30B (tool calls unreliable)" },
+];
+/** An Ollama model name ("qwen3.8:27b", "user/model:tag"). Empty = the server's default. */
+export const KaggleModel = z.string().max(100).regex(/^[\w.:/-]*$/, "not an Ollama model name");
 
 /**
  * Team shape. "auto": the orchestrator decides (workers, and leads for big areas). "three-tier": every planned
@@ -112,6 +133,8 @@ export const JobRecord = z.object({
   chatModel: ChatModel.default("sonnet"),
   runOn: RunOn.default("auto"),
   models: ModelPreset.default("sonnet-haiku"),
+  /** Ollama model for the "kaggle" preset or chat model. */
+  kaggleModel: KaggleModel.default(""),
   workers: z.string().default("auto"), // "auto" | "1"..String(MAX_WORKERS)
   budgetUsd: num,
   reviewCap: num.default(3),
@@ -199,6 +222,7 @@ export const NewJobInput = z.object({
   chatModel: ChatModel.default("sonnet"),
   runOn: RunOn.default("auto"),
   models: ModelPreset.default("sonnet-haiku"),
+  kaggleModel: KaggleModel.default(""),
   workers: z.enum(WORKER_CHOICES).default("auto"),
   budgetUsd: z.number().positive().max(500).optional(),
   reviewCap: z.number().int().min(1).max(10).default(3),

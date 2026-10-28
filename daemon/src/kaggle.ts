@@ -138,6 +138,20 @@ export async function ensureKaggleServer(relay: Relay, log: (s: string) => Promi
   return starting;
 }
 
+/** Pull `model` onto the running server unless it's already there. Streamed: quick tunnels cut silent requests at 100 s. */
+export async function ensureKaggleModel(s: KaggleServer, model: string, log: (s: string) => Promise<void> | void = () => undefined): Promise<void> {
+  const h = { Authorization: `Bearer ${s.key}`, "Content-Type": "application/json" };
+  const tags = (await (await fetch(`${s.url}/api/tags`, { headers: h })).json()) as { models?: Array<{ name: string }> };
+  const have = (tags.models ?? []).map((m) => m.name);
+  if (have.includes(model) || have.includes(`${model}:latest`)) return;
+  await log(`Kaggle server: downloading ${model} (first use, a few minutes)...`);
+  const res = await fetch(`${s.url}/api/pull`, { method: "POST", headers: h, body: JSON.stringify({ model, stream: true }) });
+  let last = "";
+  for await (const chunk of res.body ?? []) last = Buffer.from(chunk).toString().trim().split("\n").pop() || last;
+  const out = JSON.parse(last || "{}") as { status?: string; error?: string };
+  if (!res.ok || out.error || out.status !== "success") throw new Error(`Couldn't download ${model} on Kaggle: ${out.error ?? res.status}`);
+}
+
 export async function stopKaggleServer(relay: Relay): Promise<boolean> {
   const saved = await relay.r.get(SERVER_KEY);
   await relay.r.del(SERVER_KEY);

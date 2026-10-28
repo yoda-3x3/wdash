@@ -3,7 +3,19 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { MAX_WORKERS, MODEL_PRESETS, NO_PROJECT, WORKER_CHOICES, type ChatModel, type JobKind, type ModelPreset, type ProjectConfig, type TeamShape } from "@wdash/shared";
+import {
+  KAGGLE_MODELS,
+  MAX_WORKERS,
+  MODEL_PRESETS,
+  NO_PROJECT,
+  WORKER_CHOICES,
+  presetLabel,
+  type ChatModel,
+  type JobKind,
+  type ModelPreset,
+  type ProjectConfig,
+  type TeamShape,
+} from "@wdash/shared";
 import { api, usePoll } from "@/lib/client";
 import { useBoard } from "./Shell";
 import { AttachButton, FileChips, dropProps, useUploads } from "./Attachments";
@@ -35,6 +47,8 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
   const [shape, setShape] = useState<TeamShape>("auto");
   const [models, setModels] = useState<ModelPreset>("sonnet-haiku");
   const [chatModel, setChatModel] = useState<ChatModel>("sonnet");
+  const [kaggleModel, setKaggleModel] = useState(KAGGLE_MODELS[0]!.id);
+  const kaggle = chat ? chatModel === "kaggle" : models === "kaggle";
   const [autoMode, setAutoMode] = useState(false);
   const [lite, setLite] = useState(false);
 
@@ -99,7 +113,9 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
         workers,
         shape,
         models,
-        runOn,
+        kaggleModel: kaggle ? kaggleModel : "",
+        // The Kaggle server is driven from the PC.
+        runOn: kaggle ? "home" : runOn,
         reviewCap,
         autoMode,
         lite,
@@ -200,6 +216,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
           </select>
         </Field>
       )}
+      {chat && kaggle && <KaggleModelField value={kaggleModel} onChange={setKaggleModel} />}
 
       <label className="flex items-start gap-2 text-sm">
         <input type="checkbox" className="mt-1" checked={autoMode} onChange={(e) => setAutoMode(e.target.checked)} />
@@ -244,19 +261,20 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
                   <option value="three-tier">3 tiers: orchestrator → leads → workers</option>
                 </select>
               </Field>
-              <Field label="Models">
+              <Field label={shape === "three-tier" ? "Models (orchestrator → leads → workers)" : "Models"}>
                 <select className="input" value={models} onChange={(e) => setModels(e.target.value as ModelPreset)}>
-                  {Object.entries(MODEL_PRESETS).map(([k, v]) => (
+                  {(Object.keys(MODEL_PRESETS) as ModelPreset[]).map((k) => (
                     <option key={k} value={k}>
-                      {v.label}
+                      {presetLabel(k, shape)}
                     </option>
                   ))}
                 </select>
               </Field>
+              {kaggle && <KaggleModelField value={kaggleModel} onChange={setKaggleModel} />}
             </>
           )}
           <Field label="Run on">
-            <select className="input" value={runOn} onChange={(e) => setRunOn(e.target.value)}>
+            <select className="input" value={kaggle ? "home" : runOn} disabled={kaggle} onChange={(e) => setRunOn(e.target.value)}>
               <option value="auto">Auto (PC if online)</option>
               <option value="home">PC only (wait if offline)</option>
               <option value="cloud" disabled={selected && !selected.cloud}>
@@ -283,6 +301,20 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
       </div>
       {err && <p className="text-sm text-bad">{err}</p>}
     </form>
+  );
+}
+
+function KaggleModelField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <Field label="Kaggle model (every agent uses it)">
+      <select className="input" value={value} onChange={(e) => onChange(e.target.value)}>
+        {KAGGLE_MODELS.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label}
+          </option>
+        ))}
+      </select>
+    </Field>
   );
 }
 
