@@ -65,7 +65,7 @@ export const RunOn = z.enum(["auto", "home", "cloud"]);
 
 export const MergeState = z.enum(["none", "pending", "merged", "needs_merge", "left_as_branch", "discarded"]);
 
-export const ModelPreset = z.enum(["opus-sonnet", "opus-opus", "sonnet-haiku"]);
+export const ModelPreset = z.enum(["opus-sonnet", "opus-opus", "sonnet-haiku", "kaggle"]);
 export type ModelPreset = z.infer<typeof ModelPreset>;
 
 /** `lead`: the middle tier in a 3-tier team (orchestrator -> leads -> workers). */
@@ -73,6 +73,8 @@ export const MODEL_PRESETS: Record<ModelPreset, { orchestrator: string; lead: st
   "opus-sonnet": { orchestrator: "opus", lead: "sonnet", worker: "sonnet", label: "Opus orchestrator + Sonnet workers" },
   "opus-opus": { orchestrator: "opus", lead: "opus", worker: "opus", label: "Opus everywhere" },
   "sonnet-haiku": { orchestrator: "sonnet", lead: "sonnet", worker: "haiku", label: "Sonnet orchestrator + Haiku workers" },
+  // Open model on the free Kaggle GPU server (daemon/src/kaggle.ts). PC only.
+  kaggle: { orchestrator: "kaggle", lead: "kaggle", worker: "kaggle", label: "Kaggle GPU (open model, free, PC only)" },
 };
 
 /**
@@ -86,7 +88,7 @@ export type TeamShape = z.infer<typeof TeamShape>;
 export const JobKind = z.enum(["team", "chat"]);
 export type JobKind = z.infer<typeof JobKind>;
 
-export const ChatModel = z.enum(["opus", "sonnet", "haiku"]);
+export const ChatModel = z.enum(["opus", "sonnet", "haiku", "kaggle"]);
 export type ChatModel = z.infer<typeof ChatModel>;
 
 /** Agent id of a chat job's single agent. */

@@ -4,6 +4,7 @@ import { runCloud } from "./cloud.js";
 import { env, loadLocalProjects } from "./config.js";
 import { enableCloud, setupCloud } from "./enableCloud.js";
 import { runHome } from "./home.js";
+import { ensureKaggleServer, healthy, kernelStatus, stopKaggleServer, type KaggleServer } from "./kaggle.js";
 import { Relay } from "./relay.js";
 
 const USAGE = `wdash daemon
@@ -13,7 +14,31 @@ const USAGE = `wdash daemon
   wdash-daemon check                         validate config and relay connectivity
   wdash-daemon setup-cloud                   set the wdash repo's secrets so any project can run in the cloud
   wdash-daemon enable-cloud <project>...     (older per-project setup; not needed after setup-cloud)
+  wdash-daemon kaggle up|status|down         start, check, or stop the open-model server on a Kaggle GPU
 `;
+
+async function kaggle(sub: string | undefined): Promise<number> {
+  const relay = new Relay();
+  try {
+    if (sub === "up") {
+      const s = await ensureKaggleServer(relay, (t) => console.log(t));
+      console.log(`ready: ${s.url} (${s.models.join(", ")})`);
+    } else if (sub === "status") {
+      console.log(`notebook: ${JSON.stringify(await kernelStatus())}`);
+      const raw = await relay.r.get("wd:kaggle:server");
+      const s = raw ? (JSON.parse(raw) as KaggleServer) : undefined;
+      console.log(s ? `server:   ${s.url} (${s.models.join(", ")}) ${(await healthy(s)) ? "healthy" : "NOT responding"}` : "server:   none");
+    } else if (sub === "down") {
+      console.log((await stopKaggleServer(relay)) ? "stopped" : "no running server");
+    } else {
+      console.error(USAGE);
+      return 2;
+    }
+    return 0;
+  } finally {
+    await relay.close();
+  }
+}
 
 async function check(): Promise<number> {
   const e = env();
@@ -38,6 +63,7 @@ async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2);
   if (cmd === "home") return runHome();
   if (cmd === "check") process.exit(await check());
+  if (cmd === "kaggle") process.exit(await kaggle(rest[0]));
   if (cmd === "setup-cloud") {
     for (const line of await setupCloud()) console.log(line);
     process.exit(0);

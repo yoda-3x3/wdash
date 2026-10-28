@@ -29,6 +29,7 @@ import { chatServer, leadServer, orchestratorServer, workerServer, type PlannedW
 import { runChecks, type CheckResult } from "./checks.js";
 import { env } from "./config.js";
 import * as G from "./git.js";
+import { ensureKaggleServer, isKaggleModel } from "./kaggle.js";
 import { clear, clearJob, raise } from "./notify.js";
 import { conflictingClaims, globsOverlap, inside, type PolicyContext } from "./permissions.js";
 import { OTHER_REPOS_DIR, openRepo, pushRepo } from "./otherRepos.js";
@@ -168,6 +169,9 @@ export class JobRunner implements AgentHost, TeamApi {
       await clear(this.relay, this.jobId, "cloud_dispatch_failed");
 
       await this.prepareMain();
+      if (this.job.kind === "chat" ? isKaggleModel(this.job.chatModel) : this.job.models === "kaggle") {
+        await ensureKaggleServer(this.relay, (text) => this.info(text));
+      }
       const existing = await this.relay.getAgents(this.jobId);
       if (existing.length) await this.resumeAgents(existing);
       else if (this.job.kind === "chat") await this.startChat();

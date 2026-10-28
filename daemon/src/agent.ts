@@ -12,6 +12,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { truncate, sessionProjectKey, LITE_NOTES_CHARS, LITE_TOOLS, type AgentRecord, type AgentStatus } from "@wdash/shared";
 import { AsyncQueue } from "./asyncQueue.js";
+import { isKaggleModel, kaggleAgent } from "./kaggle.js";
 import { decide, DISALLOWED_TOOLS, type PolicyContext } from "./permissions.js";
 import { redisSessionStore } from "./sessionStore.js";
 import type { Relay } from "./relay.js";
@@ -148,10 +149,11 @@ export class AgentRunner {
     const lite = !!this.opts.lite;
     const notes = existsSync(claudeMd) ? readFileSync(claudeMd, "utf8") : "";
     const projectNotes = notes ? `\n\n# Project CLAUDE.md\n${lite ? truncate(notes, LITE_NOTES_CHARS) : notes}` : "";
+    const kaggle = isKaggleModel(this.rec.model) ? kaggleAgent(this.rec.model) : undefined;
 
     return {
       cwd: this.opts.cwd,
-      model: this.rec.model,
+      model: kaggle?.model ?? this.rec.model,
       canUseTool,
       permissionMode: "default" as const,
       // No filesystem settings: user/project allow-rules would bypass the wdash policy. CLAUDE.md is appended instead.
@@ -163,7 +165,7 @@ export class AgentRunner {
       resume: this.rec.sessionId,
       sessionStore: redisSessionStore(this.host.relay, sessionProjectKey(this.host.jobId, this.id)),
       abortController: this.abort,
-      env: agentEnv(this.opts.env),
+      env: agentEnv({ ...this.opts.env, ...kaggle?.env }),
       stderr: (s: string) => {
         if (/error/i.test(s)) void this.emit("info", { stderr: truncate(s, 2000) });
       },
@@ -239,7 +241,8 @@ export class AgentRunner {
       }
       case "result": {
         this.busy = false;
-        this.rec.costUsd = this.baseCostUsd + msg.total_cost_usd;
+        // The SDK prices every model as Claude; the Kaggle server is free.
+        this.rec.costUsd = this.baseCostUsd + (isKaggleModel(this.rec.model) ? 0 : msg.total_cost_usd);
         await this.save();
         // An assistant-level API error may already have failed this agent; don't raise the same stop twice.
         if ((msg.is_error || msg.subtype !== "success") && this.rec.status !== "failed") {
@@ -260,10 +263,11 @@ export class AgentRunner {
   }
 }
 
-/** The Vercel token is only for the vercel_deploy tool; agents' own shell commands never see it. */
+/** The Vercel token is only for the vercel_deploy tool; agents' own shell commands never see it. An undefined in `extra` removes that variable. */
 function agentEnv(extra?: Record<string, string | undefined>): Record<string, string | undefined> {
   const e = { ...process.env, ...extra };
   delete e.VERCEL_TOKEN;
+  for (const k of Object.keys(e)) if (e[k] === undefined) delete e[k];
   return e;
 }
 

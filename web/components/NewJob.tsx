@@ -14,7 +14,7 @@ const LAST_PROJECT = "wdash:lastProject";
 const REPO_PREFIX = "repo:";
 const AUTO_MODE = "wdash:autoMode";
 
-const CHAT_MODELS: Record<ChatModel, string> = { sonnet: "Sonnet", opus: "Opus", haiku: "Haiku" };
+const CHAT_MODELS: Record<ChatModel, string> = { sonnet: "Sonnet", opus: "Opus", haiku: "Haiku", kaggle: "Kaggle GPU (open model, PC only)" };
 
 /** Hybrid form (SPEC.md §4): project + task up front, everything else under Advanced. Also starts chats. */
 export function NewJob({ kind = "team" }: { kind?: JobKind }) {
