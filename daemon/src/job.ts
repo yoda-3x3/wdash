@@ -29,7 +29,7 @@ import { chatServer, leadServer, orchestratorServer, workerServer, type PlannedW
 import { runChecks, type CheckResult } from "./checks.js";
 import { env } from "./config.js";
 import * as G from "./git.js";
-import { ensureKaggleModel, ensureKaggleServer, isKaggleModel } from "./kaggle.js";
+import { ensureKaggleFor, isKaggleModel, kaggleModelName } from "./kaggle.js";
 import { clear, clearJob, raise } from "./notify.js";
 import { conflictingClaims, globsOverlap, inside, type PolicyContext } from "./permissions.js";
 import { OTHER_REPOS_DIR, openRepo, pushRepo } from "./otherRepos.js";
@@ -169,9 +169,14 @@ export class JobRunner implements AgentHost, TeamApi {
       await clear(this.relay, this.jobId, "cloud_dispatch_failed");
 
       await this.prepareMain();
+      // Kaggle models this job uses get their servers up first; two different models boot two servers in parallel.
+      const kaggleModels = new Set(
+        (this.job.kind === "chat" ? [this.modelFor(this.job.chatModel)] : [this.modelFor("kaggle"), this.modelFor("kaggle", true)])
+          .filter(isKaggleModel)
+          .map(kaggleModelName),
+      );
       if (this.job.kind === "chat" ? isKaggleModel(this.job.chatModel) : this.job.models === "kaggle") {
-        const server = await ensureKaggleServer(this.relay, (text) => this.info(text));
-        if (this.job.kaggleModel) await ensureKaggleModel(server, this.job.kaggleModel, (text) => this.info(text));
+        await Promise.all([...kaggleModels].map((m) => ensureKaggleFor(this.relay, m, (text) => this.info(text))));
       }
       const existing = await this.relay.getAgents(this.jobId);
       if (existing.length) await this.resumeAgents(existing);
@@ -332,9 +337,11 @@ export class JobRunner implements AgentHost, TeamApi {
     await this.relay.setStatus(this.jobId, status);
   }
 
-  /** "kaggle" becomes "kaggle:<model>" when the job picked a Kaggle model. */
-  private modelFor(model: string): string {
-    return model === "kaggle" && this.job.kaggleModel ? `kaggle:${this.job.kaggleModel}` : model;
+  /** "kaggle" becomes "kaggle:<model>" when the job picked a Kaggle model; workers can have their own. */
+  private modelFor(model: string, worker = false): string {
+    if (model !== "kaggle") return model;
+    const picked = (worker && this.job.kaggleWorkerModel) || this.job.kaggleModel;
+    return picked ? `kaggle:${picked}` : model;
   }
 
   private makeRunner(rec: AgentRecord, cwd: string, systemAppend: string): AgentRunner {
@@ -820,7 +827,7 @@ export class JobRunner implements AgentHost, TeamApi {
     const rec: AgentRecord = {
       id: w.name,
       role,
-      model: this.modelFor(role === "lead" ? preset.lead : preset.worker),
+      model: role === "lead" ? this.modelFor(preset.lead) : this.modelFor(preset.worker, true),
       name: w.name,
       task: w.task,
       globs: w.globs,

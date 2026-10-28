@@ -96,6 +96,7 @@ export async function createJob(input: NewJobInput, project: ProjectConfig): Pro
     runOn: input.runOn,
     models: input.models,
     kaggleModel: input.kaggleModel,
+    kaggleWorkerModel: input.kaggleWorkerModel,
     workers: input.workers,
     budgetUsd: input.budgetUsd ?? project.defaultBudgetUsd,
     // Low usage mode: one review round per worker before asking the user.

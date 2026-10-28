@@ -135,6 +135,8 @@ export const JobRecord = z.object({
   models: ModelPreset.default("sonnet-haiku"),
   /** Ollama model for the "kaggle" preset or chat model. */
   kaggleModel: KaggleModel.default(""),
+  /** Workers' Kaggle model when it differs (a second server). Empty = same as kaggleModel. */
+  kaggleWorkerModel: KaggleModel.default(""),
   workers: z.string().default("auto"), // "auto" | "1"..String(MAX_WORKERS)
   budgetUsd: num,
   reviewCap: num.default(3),
@@ -223,6 +225,8 @@ export const NewJobInput = z.object({
   runOn: RunOn.default("auto"),
   models: ModelPreset.default("sonnet-haiku"),
   kaggleModel: KaggleModel.default(""),
+  /** Workers' Kaggle model when it differs (a second server). Empty = same as kaggleModel. */
+  kaggleWorkerModel: KaggleModel.default(""),
   workers: z.enum(WORKER_CHOICES).default("auto"),
   budgetUsd: z.number().positive().max(500).optional(),
   reviewCap: z.number().int().min(1).max(10).default(3),

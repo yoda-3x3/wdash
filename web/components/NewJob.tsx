@@ -48,6 +48,8 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
   const [models, setModels] = useState<ModelPreset>("sonnet-haiku");
   const [chatModel, setChatModel] = useState<ChatModel>("sonnet");
   const [kaggleModel, setKaggleModel] = useState(KAGGLE_MODELS[0]!.id);
+  /** "" = same as kaggleModel; a different model runs on a second Kaggle server. */
+  const [kaggleWorkerModel, setKaggleWorkerModel] = useState("");
   const kaggle = chat ? chatModel === "kaggle" : models === "kaggle";
   const [autoMode, setAutoMode] = useState(false);
   const [lite, setLite] = useState(false);
@@ -114,6 +116,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
         shape,
         models,
         kaggleModel: kaggle ? kaggleModel : "",
+        kaggleWorkerModel: kaggle && !chat && kaggleWorkerModel !== kaggleModel ? kaggleWorkerModel : "",
         // The Kaggle server is driven from the PC.
         runOn: kaggle ? "home" : runOn,
         reviewCap,
@@ -216,7 +219,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
           </select>
         </Field>
       )}
-      {chat && kaggle && <KaggleModelField value={kaggleModel} onChange={setKaggleModel} />}
+      {chat && kaggle && <KaggleModelField label="Kaggle model" value={kaggleModel} onChange={setKaggleModel} />}
 
       <label className="flex items-start gap-2 text-sm">
         <input type="checkbox" className="mt-1" checked={autoMode} onChange={(e) => setAutoMode(e.target.checked)} />
@@ -270,7 +273,15 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
                   ))}
                 </select>
               </Field>
-              {kaggle && <KaggleModelField value={kaggleModel} onChange={setKaggleModel} />}
+              {kaggle && (
+                <>
+                  <KaggleModelField label={shape === "three-tier" ? "Kaggle model: orchestrator + leads" : "Kaggle model: orchestrator"} value={kaggleModel} onChange={setKaggleModel} />
+                  <KaggleModelField label="Kaggle model: workers" value={kaggleWorkerModel} onChange={setKaggleWorkerModel} same />
+                  {kaggleWorkerModel && kaggleWorkerModel !== kaggleModel && (
+                    <p className="text-xs text-muted sm:col-span-2">Two models run on two Kaggle servers at once, which uses your weekly GPU hours twice as fast.</p>
+                  )}
+                </>
+              )}
             </>
           )}
           <Field label="Run on">
@@ -304,10 +315,11 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
   );
 }
 
-function KaggleModelField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function KaggleModelField({ label = "Kaggle model", value, onChange, same }: { label?: string; value: string; onChange: (v: string) => void; same?: boolean }) {
   return (
-    <Field label="Kaggle model (every agent uses it)">
+    <Field label={label}>
       <select className="input" value={value} onChange={(e) => onChange(e.target.value)}>
+        {same && <option value="">Same as orchestrator (one server)</option>}
         {KAGGLE_MODELS.map((m) => (
           <option key={m.id} value={m.id}>
             {m.label}

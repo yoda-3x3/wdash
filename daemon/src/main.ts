@@ -4,7 +4,7 @@ import { runCloud } from "./cloud.js";
 import { env, loadLocalProjects } from "./config.js";
 import { enableCloud, setupCloud } from "./enableCloud.js";
 import { runHome } from "./home.js";
-import { ensureKaggleServer, healthy, kernelStatus, stopKaggleServer, type KaggleServer } from "./kaggle.js";
+import { ensureKaggleFor, liveKaggleServers, stopKaggleServers } from "./kaggle.js";
 import { Relay } from "./relay.js";
 
 const USAGE = `wdash daemon
@@ -14,22 +14,24 @@ const USAGE = `wdash daemon
   wdash-daemon check                         validate config and relay connectivity
   wdash-daemon setup-cloud                   set the wdash repo's secrets so any project can run in the cloud
   wdash-daemon enable-cloud <project>...     (older per-project setup; not needed after setup-cloud)
-  wdash-daemon kaggle up|status|down         start, check, or stop the open-model server on a Kaggle GPU
+  wdash-daemon kaggle up [model]             start (or reuse) a Kaggle GPU server for a model (default: first of KAGGLE_MODELS)
+  wdash-daemon kaggle status                 list the running Kaggle servers
+  wdash-daemon kaggle down [slot]            stop all Kaggle servers, or one
 `;
 
-async function kaggle(sub: string | undefined): Promise<number> {
+async function kaggle(sub: string | undefined, arg: string | undefined): Promise<number> {
   const relay = new Relay();
   try {
     if (sub === "up") {
-      const s = await ensureKaggleServer(relay, (t) => console.log(t));
-      console.log(`ready: ${s.url} (${s.models.join(", ")})`);
+      const s = await ensureKaggleFor(relay, arg, (t) => console.log(t), arg ? [arg] : undefined);
+      console.log(`ready: server ${s.slot} ${s.url} (${s.models.join(", ")})`);
     } else if (sub === "status") {
-      console.log(`notebook: ${JSON.stringify(await kernelStatus())}`);
-      const raw = await relay.r.get("wd:kaggle:server");
-      const s = raw ? (JSON.parse(raw) as KaggleServer) : undefined;
-      console.log(s ? `server:   ${s.url} (${s.models.join(", ")}) ${(await healthy(s)) ? "healthy" : "NOT responding"}` : "server:   none");
+      const live = await liveKaggleServers(relay);
+      for (const s of live) console.log(`server ${s.slot}: ${s.url} (${s.models.join(", ")}) up ${Math.round((Date.now() - s.startedAt) / 60_000)} min`);
+      if (!live.length) console.log("no Kaggle servers running");
     } else if (sub === "down") {
-      console.log((await stopKaggleServer(relay)) ? "stopped" : "no running server");
+      const stopped = await stopKaggleServers(relay, arg ? Number(arg) : undefined);
+      console.log(stopped.length ? `stopped server ${stopped.join(", ")}` : "no running server");
     } else {
       console.error(USAGE);
       return 2;
@@ -63,7 +65,7 @@ async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2);
   if (cmd === "home") return runHome();
   if (cmd === "check") process.exit(await check());
-  if (cmd === "kaggle") process.exit(await kaggle(rest[0]));
+  if (cmd === "kaggle") process.exit(await kaggle(rest[0], rest[1]));
   if (cmd === "setup-cloud") {
     for (const line of await setupCloud()) console.log(line);
     process.exit(0);
