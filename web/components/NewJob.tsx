@@ -185,7 +185,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
       <div className="space-y-2">
         <div className="flex items-center gap-3">
           <AttachButton onFiles={files.add} />
-          <span className="text-xs text-muted">Docs, PDFs, images, data… up to 4 MB each. Or drop them here.</span>
+          <span className="text-xs text-muted">Docs, PDFs, images, data… up to 90 MB each. Or drop them here.</span>
         </div>
         <FileChips items={files.items} onRemove={files.remove} />
       </div>

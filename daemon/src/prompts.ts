@@ -1,4 +1,4 @@
-import { branchFor, type AgentRecord, type JobRecord, type ProjectConfig } from "@wdash/shared";
+import { MAX_WORKERS, branchFor, type AgentRecord, type JobRecord, type ProjectConfig } from "@wdash/shared";
 
 function checksLine(p: ProjectConfig): string {
   const c = p.commands;
@@ -50,7 +50,7 @@ For big tasks you can add a middle tier: mark a plan item lead: true. A lead own
 
 export function orchestratorPrompt(job: JobRecord, project: ProjectConfig): string {
   if (job.lite) return orchestratorLite(job, project) + deployLine(project);
-  const workers = job.workers === "auto" ? "Choose 1-15 workers. Use as few as the task needs (1 is fine for small tasks); split big tasks wide so they finish fast." : `Use exactly ${job.workers} worker(s).`;
+  const workers = job.workers === "auto" ? `Choose 1-${MAX_WORKERS} workers (leads and their workers count too). Use as few as the task needs (1 is fine for small tasks); split big tasks wide so they finish fast.` : `Use exactly ${job.workers} worker(s).`;
   return `${COMMON}${tiersLine(job)}
 # Your role: ORCHESTRATOR (project ${project.name}, repo ${project.repo})
 

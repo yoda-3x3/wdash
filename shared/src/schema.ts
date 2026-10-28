@@ -93,7 +93,7 @@ export type ChatModel = z.infer<typeof ChatModel>;
 export const CHAT_AGENT = "claude";
 
 /** Most workers a job can have, helpers included. */
-export const MAX_WORKERS = 15;
+export const MAX_WORKERS = 30;
 export const WORKER_CHOICES = ["auto", ...Array.from({ length: MAX_WORKERS }, (_, i) => String(i + 1))] as [string, ...string[]];
 
 const num = z.coerce.number();
@@ -110,7 +110,7 @@ export const JobRecord = z.object({
   chatModel: ChatModel.default("sonnet"),
   runOn: RunOn.default("auto"),
   models: ModelPreset.default("sonnet-haiku"),
-  workers: z.string().default("auto"), // "auto" | "1".."15"
+  workers: z.string().default("auto"), // "auto" | "1"..String(MAX_WORKERS)
   budgetUsd: num,
   reviewCap: num.default(3),
   costUsd: num.default(0),
@@ -145,8 +145,15 @@ export const LITE_NOTES_CHARS = 3000;
 
 // ---------- Attachments ----------
 
-/** Per file. Vercel caps request bodies at 4.5 MB, and the contents are stored base64 in Redis. */
-export const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
+/**
+ * Per file. Vercel caps request bodies at 4.5 MB, so files go up in UPLOAD_CHUNK_BYTES pieces, each stored
+ * base64 under its own Redis key (K.fileChunk) and joined again by the daemon.
+ */
+export const MAX_ATTACHMENT_BYTES = 90 * 1024 * 1024;
+/** One upload request: every piece but the last is exactly this size. */
+export const UPLOAD_CHUNK_BYTES = 3 * 1024 * 1024;
+/** Files agents hand the user (share_file) are downloaded in one response, which Vercel caps too. */
+export const MAX_SHARE_BYTES = 4 * 1024 * 1024;
 export const MAX_ATTACHMENTS = 20;
 /** Where the daemon puts attachments, relative to each agent's worktree. Git-excluded, never committed. */
 export const ATTACHMENTS_DIR = ".wdash/attachments";
@@ -160,6 +167,8 @@ export const Attachment = z.object({
   addedAt: z.number(),
   /** Agent id when an agent shared it (share_file); absent for the user's uploads. */
   from: z.string().optional(),
+  /** Set when the contents are stored in pieces (K.fileChunk 0..chunks-1) instead of K.fileData. */
+  chunks: z.number().int().positive().optional(),
 });
 export type Attachment = z.infer<typeof Attachment>;
 

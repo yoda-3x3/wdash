@@ -206,6 +206,19 @@ export class Relay {
     return v ? Buffer.from(v, "base64") : undefined;
   }
 
+  /** An attachment's contents: joined from its pieces when it was uploaded in chunks (big files). */
+  async getAttachmentData(jobId: string, meta: Attachment): Promise<Buffer | undefined> {
+    if (!meta.chunks) return this.getFileData(jobId, meta.id);
+    const parts: Buffer[] = [];
+    // One piece at a time: a 90 MB file would be ~120 MB of base64 in a single reply.
+    for (let n = 0; n < meta.chunks; n++) {
+      const v = await this.r.get(K.fileChunk(meta.id, n));
+      if (v === null) return undefined; // expired or never finished uploading
+      parts.push(Buffer.from(v, "base64"));
+    }
+    return Buffer.concat(parts);
+  }
+
   async getProject(name: string): Promise<ProjectConfig | undefined> {
     if (name === NO_PROJECT) return scratchProject();
     const v = await this.r.hget(K.projects, name);

@@ -1,6 +1,8 @@
 // Redis key layout shared by the web app and the daemon. See SPEC.md §5.
 
 export const TTL_SECONDS = 90 * 24 * 60 * 60;
+/** Big attachments take a lot of Redis space (a 90 MB file is ~120 MB as base64), so their pieces are kept 3 days. */
+export const FILE_CHUNK_TTL_SECONDS = 3 * 24 * 60 * 60;
 export const HEARTBEAT_TTL_SECONDS = 30;
 export const LEASE_TTL_SECONDS = 30;
 
@@ -18,6 +20,7 @@ export const K = {
   files: (id: string) => `wd:job:${id}:files`, // HASH file_id -> Attachment JSON
   fileData: (id: string) => `wd:job:${id}:filedata`, // HASH file_id -> base64 contents
   upload: (fileId: string) => `wd:upload:${fileId}`, // STRING EX 1 day: { meta, data } for a file picked before its job exists
+  fileChunk: (fileId: string, n: number) => `wd:filechunk:${fileId}:${n}`, // STRING: base64 of one UPLOAD_CHUNK_BYTES piece
   lease: (id: string) => `wd:job:${id}:lease`, // STRING EX 30 -> "home" | "cloud:<run>"
   sessions: (projectKey: string, sessionId: string, subpath?: string) =>
     `wd:sess:${projectKey}:${sessionId}${subpath ? `:${subpath}` : ""}`, // LIST of transcript entries

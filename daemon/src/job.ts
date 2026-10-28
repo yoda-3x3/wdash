@@ -7,7 +7,7 @@ import {
   CHAT_AGENT,
   MAX_WORKERS,
   NO_PROJECT,
-  MAX_ATTACHMENT_BYTES,
+  MAX_SHARE_BYTES,
   MAX_ATTACHMENTS,
   safeFileName,
   uniqueFileName,
@@ -1247,7 +1247,7 @@ export class JobRunner implements AgentHost, TeamApi {
       if (existsSync(target)) continue;
       let data = this.fileCache.get(f.id);
       if (!data) {
-        data = await this.relay.getFileData(this.jobId, f.id);
+        data = await this.relay.getAttachmentData(this.jobId, f);
         if (!data) {
           await this.info(`Attachment ${f.name} is missing from storage; skipped.`);
           continue;
@@ -1312,7 +1312,7 @@ export class JobRunner implements AgentHost, TeamApi {
     if (!inside(a.cwd, abs)) throw new Error(`${path} is outside your working directory.`);
     if (!existsSync(abs) || !statSync(abs).isFile()) throw new Error(`${path} isn't a file.`);
     const size = statSync(abs).size;
-    if (size > MAX_ATTACHMENT_BYTES) throw new Error(`${path} is ${(size / 1024 / 1024).toFixed(1)} MB; the limit is ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
+    if (size > MAX_SHARE_BYTES) throw new Error(`${path} is ${(size / 1024 / 1024).toFixed(1)} MB; files you share can be at most ${MAX_SHARE_BYTES / 1024 / 1024} MB.`);
     const existing = await this.relay.listFiles(this.jobId);
     if (existing.length >= MAX_ATTACHMENTS) throw new Error(`This job already has ${MAX_ATTACHMENTS} files.`);
     const name = uniqueFileName(safeFileName(basename(abs)), new Set(existing.map((f) => f.name)));

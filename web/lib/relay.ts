@@ -15,6 +15,10 @@ import {
   WdEvent,
   Attachment,
   MAX_ATTACHMENTS,
+  MAX_ATTACHMENT_BYTES,
+  MAX_SHARE_BYTES,
+  UPLOAD_CHUNK_BYTES,
+  FILE_CHUNK_TTL_SECONDS,
   safeFileName,
   uniqueFileName,
   type Command,
@@ -242,16 +246,95 @@ export async function attachUploads(jobId: string, uploadIds: string[]): Promise
   for (const id of uploadIds) {
     const raw = await redis().get<string>(K.upload(id));
     if (!raw) throw new Error("An attached file expired or failed to upload. Remove it and attach it again.");
-    const { meta, data } = JSON.parse(raw) as { meta: Attachment; data: string };
-    out.push(await storeFile(jobId, Attachment.parse(meta), data, taken));
+    const staged = JSON.parse(typeof raw === "string" ? raw : JSON.stringify(raw)) as StagedUpload;
+    if (staged.chunked) out.push(await storeChunkedFile(jobId, { ...staged, meta: Attachment.parse(staged.meta) }, taken));
+    else out.push(await storeFile(jobId, Attachment.parse(staged.meta), staged.data ?? "", taken));
     await redis().del(K.upload(id));
   }
   return out;
 }
 
 export async function getFileData(jobId: string, fileId: string): Promise<Buffer | undefined> {
+  const meta = (await listFiles(jobId)).find((f) => f.id === fileId);
+  if (meta?.chunks) {
+    // Downloads go out in one response, which Vercel caps; big uploads are for the agents, not for downloading back.
+    if (meta.size > MAX_SHARE_BYTES) return undefined;
+    const parts = await redis().mget<(string | null)[]>(...Array.from({ length: meta.chunks }, (_, n) => K.fileChunk(fileId, n)));
+    if (parts.some((p) => p === null)) return undefined;
+    return Buffer.concat(parts.map((p) => Buffer.from(p as string, "base64")));
+  }
   const v = await redis().hget<string>(K.fileData(jobId), fileId);
   return v ? Buffer.from(v, "base64") : undefined;
+}
+
+// ---------------------------------------------------------------- chunked uploads (files up to MAX_ATTACHMENT_BYTES)
+
+type StagedUpload = { meta: Attachment; data?: string; chunked?: boolean; complete?: boolean };
+
+/** Bytes piece `n` must have: UPLOAD_CHUNK_BYTES, except the last, which has the rest. */
+export function chunkSize(size: number, chunks: number, n: number): number {
+  return n < chunks - 1 ? UPLOAD_CHUNK_BYTES : size - UPLOAD_CHUNK_BYTES * (chunks - 1);
+}
+
+/** Starts an upload: the browser then PUTs each piece and calls completeUpload. */
+export async function startUpload(rawName: string, type: string, size: number): Promise<Attachment> {
+  if (!Number.isInteger(size) || size <= 0) throw new Error("The file is empty.");
+  if (size > MAX_ATTACHMENT_BYTES) throw new Error(`Files can be at most ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
+  const chunks = Math.max(1, Math.ceil(size / UPLOAD_CHUNK_BYTES));
+  const meta: Attachment = { id: newId("f"), name: safeFileName(rawName), size, type: type || "application/octet-stream", addedAt: Date.now(), chunks };
+  const staged: StagedUpload = { meta, chunked: true };
+  await redis().set(K.upload(meta.id), JSON.stringify(staged), { ex: UPLOAD_TTL_SECONDS });
+  return meta;
+}
+
+async function getStaged(id: string): Promise<StagedUpload | undefined> {
+  const raw = await redis().get<string>(K.upload(id));
+  return raw ? (JSON.parse(typeof raw === "string" ? raw : JSON.stringify(raw)) as StagedUpload) : undefined;
+}
+
+/** Stores piece `n` of an upload. Each piece is one request, under Vercel's body limit. */
+export async function putUploadChunk(id: string, n: number, bytes: Uint8Array): Promise<void> {
+  const staged = await getStaged(id);
+  if (!staged?.chunked || !staged.meta.chunks) throw new Error("Unknown or expired upload. Attach the file again.");
+  const { chunks, size } = { chunks: staged.meta.chunks, size: staged.meta.size };
+  if (!Number.isInteger(n) || n < 0 || n >= chunks) throw new Error("Bad piece number.");
+  if (bytes.byteLength !== chunkSize(size, chunks, n)) throw new Error(`Piece ${n} has the wrong size.`);
+  await redis().set(K.fileChunk(id, n), Buffer.from(bytes).toString("base64"), { ex: UPLOAD_TTL_SECONDS });
+}
+
+/** Checks every piece arrived. Returns the file's metadata for the form. */
+export async function completeUpload(id: string): Promise<Attachment> {
+  const staged = await getStaged(id);
+  if (!staged?.chunked || !staged.meta.chunks) throw new Error("Unknown or expired upload. Attach the file again.");
+  const keys = Array.from({ length: staged.meta.chunks }, (_, n) => K.fileChunk(id, n));
+  const have = await redis().exists(...keys);
+  if (have !== keys.length) throw new Error(`Only ${have} of ${keys.length} pieces arrived. Attach the file again.`);
+  staged.complete = true;
+  await redis().set(K.upload(id), JSON.stringify(staged), { ex: UPLOAD_TTL_SECONDS });
+  return staged.meta;
+}
+
+/** Moves a finished chunked upload onto a job: only the metadata moves; the pieces stay, kept longer. */
+async function storeChunkedFile(jobId: string, staged: StagedUpload, taken: Set<string>): Promise<Attachment> {
+  if (!staged.complete || !staged.meta.chunks) throw new Error(`${staged.meta.name} didn't finish uploading. Remove it and attach it again.`);
+  const m: Attachment = { ...staged.meta, name: uniqueFileName(staged.meta.name, taken) };
+  taken.add(m.name);
+  const r = redis();
+  await r.hset(K.files(jobId), { [m.id]: JSON.stringify(m) });
+  await r.expire(K.files(jobId), TTL_SECONDS);
+  for (let n = 0; n < m.chunks!; n++) await r.expire(K.fileChunk(m.id, n), FILE_CHUNK_TTL_SECONDS);
+  return m;
+}
+
+/** Adds an already-uploaded file (chunked) to a running job. */
+export async function addJobUpload(jobId: string, uploadId: string): Promise<Attachment> {
+  const existing = await listFiles(jobId);
+  if (existing.length >= MAX_ATTACHMENTS) throw new Error(`A job can have at most ${MAX_ATTACHMENTS} files.`);
+  const staged = await getStaged(uploadId);
+  if (!staged) throw new Error("The file expired or failed to upload. Attach it again.");
+  const m = await storeChunkedFile(jobId, staged, new Set(existing.map((f) => f.name)));
+  await redis().del(K.upload(uploadId));
+  return m;
 }
 
 // ---------------------------------------------------------------- new projects

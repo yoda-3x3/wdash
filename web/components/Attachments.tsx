@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, type Attachment } from "@wdash/shared";
 
-type Pending = { key: string; name: string; size: number; status: "uploading" | "ready" | "error"; meta?: Attachment; error?: string };
+type Pending = { key: string; name: string; size: number; status: "uploading" | "ready" | "error"; meta?: Attachment; error?: string; percent?: number };
 
 /**
  * Files upload as soon as they're picked, so submitting stays instant.
@@ -27,7 +27,7 @@ export function useUploads(endpoint: string) {
         continue;
       }
       setItems((xs) => [...xs, { key, name: file.name, size: file.size, status: "uploading" }]);
-      void upload(endpoint, file).then(
+      void upload(endpoint, file, (percent) => patch(key, { percent })).then(
         (meta) => patch(key, { status: "ready", meta }),
         (e: Error) => patch(key, { status: "error", error: e.message }),
       );
@@ -44,17 +44,42 @@ export function useUploads(endpoint: string) {
   };
 }
 
-async function upload(endpoint: string, file: File): Promise<Attachment> {
-  const res = await fetch(endpoint, {
+/**
+ * Sends a file in pieces (each request stays under Vercel's 4.5 MB body limit), so files up to
+ * MAX_ATTACHMENT_BYTES work. On a job's files endpoint the finished upload is then attached to the job.
+ */
+async function upload(endpoint: string, file: File, onProgress: (percent: number) => void): Promise<Attachment> {
+  const { meta, chunkBytes } = await call<{ meta: Attachment; chunkBytes: number }>("/api/uploads/start", {
     method: "POST",
-    headers: { "x-file-name": encodeURIComponent(file.name), "content-type": file.type || "application/octet-stream" },
-    body: file,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: file.name, size: file.size, type: file.type || "application/octet-stream" }),
   });
+  const chunks = meta.chunks ?? 1;
+  for (let n = 0; n < chunks; n++) {
+    const piece = file.slice(n * chunkBytes, Math.min(file.size, (n + 1) * chunkBytes));
+    // One retry per piece: a flaky school or phone connection shouldn't lose a 90 MB upload.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await call(`/api/uploads/${encodeURIComponent(meta.id)}/${n}`, { method: "PUT", headers: { "content-type": "application/octet-stream" }, body: piece });
+        break;
+      } catch (e) {
+        if (attempt >= 1 || (e as Error).message === "signed out") throw e;
+      }
+    }
+    onProgress(Math.round(((n + 1) / chunks) * 100));
+  }
+  const done = await call<Attachment>(`/api/uploads/${encodeURIComponent(meta.id)}/complete`, { method: "POST" });
+  if (endpoint === "/api/uploads") return done;
+  return call<Attachment>(endpoint, { method: "POST", headers: { "x-upload-id": meta.id } });
+}
+
+async function call<T = unknown>(url: string, init: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
   if (res.status === 401) {
     window.location.href = "/signin";
     throw new Error("signed out");
   }
-  const data = (await res.json().catch(() => ({}))) as Attachment & { error?: string };
+  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
   if (!res.ok) throw new Error(data.error ?? (res.status === 413 ? "Too large" : `HTTP ${res.status}`));
   return data;
 }
@@ -96,7 +121,7 @@ export function FileChips({ items, onRemove }: { items: Pending[]; onRemove: (ke
           className={`flex max-w-full items-center gap-2 rounded-lg border px-2 py-1 text-xs ${x.status === "error" ? "border-bad text-bad" : "border-line"}`}
         >
           <span className="truncate">{x.meta?.name ?? x.name}</span>
-          <span className="shrink-0 text-muted">{x.status === "uploading" ? "uploading…" : x.status === "error" ? x.error : fmtSize(x.size)}</span>
+          <span className="shrink-0 text-muted">{x.status === "uploading" ? `uploading${x.percent ? ` ${x.percent}%` : "…"}` : x.status === "error" ? x.error : fmtSize(x.size)}</span>
           <button type="button" className="shrink-0 text-muted hover:text-fg" aria-label={`Remove ${x.name}`} onClick={() => onRemove(x.key)}>
             ✕
           </button>
