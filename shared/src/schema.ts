@@ -68,11 +68,19 @@ export const MergeState = z.enum(["none", "pending", "merged", "needs_merge", "l
 export const ModelPreset = z.enum(["opus-sonnet", "opus-opus", "sonnet-haiku"]);
 export type ModelPreset = z.infer<typeof ModelPreset>;
 
-export const MODEL_PRESETS: Record<ModelPreset, { orchestrator: string; worker: string; label: string }> = {
-  "opus-sonnet": { orchestrator: "opus", worker: "sonnet", label: "Opus orchestrator + Sonnet workers" },
-  "opus-opus": { orchestrator: "opus", worker: "opus", label: "Opus everywhere" },
-  "sonnet-haiku": { orchestrator: "sonnet", worker: "haiku", label: "Sonnet orchestrator + Haiku workers" },
+/** `lead`: the middle tier in a 3-tier team (orchestrator -> leads -> workers). */
+export const MODEL_PRESETS: Record<ModelPreset, { orchestrator: string; lead: string; worker: string; label: string }> = {
+  "opus-sonnet": { orchestrator: "opus", lead: "sonnet", worker: "sonnet", label: "Opus orchestrator + Sonnet workers" },
+  "opus-opus": { orchestrator: "opus", lead: "opus", worker: "opus", label: "Opus everywhere" },
+  "sonnet-haiku": { orchestrator: "sonnet", lead: "sonnet", worker: "haiku", label: "Sonnet orchestrator + Haiku workers" },
 };
+
+/**
+ * Team shape. "auto": the orchestrator decides (workers, and leads for big areas). "three-tier": every planned
+ * item is a lead that splits its area among its own workers, reviews and merges them, then reports to the orchestrator.
+ */
+export const TeamShape = z.enum(["auto", "three-tier"]);
+export type TeamShape = z.infer<typeof TeamShape>;
 
 /** "team": orchestrator + workers + review. "chat": one agent you talk to directly in the project's repo. */
 export const JobKind = z.enum(["team", "chat"]);
@@ -124,6 +132,7 @@ export const JobRecord = z.object({
   autoMode: bool.default(false),
   /** Low usage mode: fewer tools, low effort, short prompts, one worker and one review round. */
   lite: bool.default(false),
+  shape: TeamShape.default("auto"),
   /** A finished job the user reopened with a follow-up message; the runner tells the agents, then clears it. */
   reopened: bool.default(false),
 });
@@ -184,6 +193,7 @@ export const NewJobInput = z.object({
   reviewCap: z.number().int().min(1).max(10).default(3),
   autoMode: z.boolean().default(false),
   lite: z.boolean().default(false),
+  shape: TeamShape.default("auto"),
   /** Upload ids from POST /api/uploads. */
   attachments: z.array(z.string()).max(MAX_ATTACHMENTS).default([]),
 });
@@ -191,7 +201,8 @@ export type NewJobInput = z.infer<typeof NewJobInput>;
 
 // ---------- Agents ----------
 
-export const AgentRole = z.enum(["orchestrator", "worker", "chat"]);
+/** lead: middle tier; owns an area, splits it among its own workers, reviews and merges them, never edits. */
+export const AgentRole = z.enum(["orchestrator", "lead", "worker", "chat"]);
 export const AgentStatus = z.enum([
   "starting",
   "running",
@@ -215,6 +226,8 @@ export const AgentRecord = z.object({
   status: AgentStatus,
   sessionId: z.string().optional(),
   branch: z.string().optional(),
+  /** Who reviews and merges this agent: "orchestrator", or the lead it works under. */
+  parent: z.string().optional(),
   reviewRounds: z.number().default(0),
   lastEventAt: z.number().default(0),
   costUsd: z.number().default(0),
@@ -325,6 +338,12 @@ export const ProjectRequest = z.object({
   updatedAt: z.number(),
 });
 export type ProjectRequest = z.infer<typeof ProjectRequest>;
+
+/** Use an existing GitHub repo as a project (owner/name). */
+export const AdoptRepoInput = z.object({
+  repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "Use owner/name"),
+});
+export type AdoptRepoInput = z.infer<typeof AdoptRepoInput>;
 
 // ---------- Approvals ----------
 

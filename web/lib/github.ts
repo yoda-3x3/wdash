@@ -41,6 +41,29 @@ export async function dispatchCloudRun(projectRepo: string, jobId: string): Prom
   }
 }
 
+export type RepoSummary = { repo: string; private: boolean; description: string | null; pushedAt: string | null };
+
+/** The repos the token can see, most recently pushed first (up to 300). */
+export async function listMyRepos(): Promise<RepoSummary[]> {
+  const out: RepoSummary[] = [];
+  for (let page = 1; page <= 3; page++) {
+    const res = await gh(`/user/repos?per_page=100&page=${page}&sort=pushed&affiliation=owner,collaborator,organization_member`);
+    if (!res.ok) throw new Error(`GitHub wouldn't list repos (${res.status}).`);
+    const batch = (await res.json()) as Array<{ full_name: string; private: boolean; description: string | null; pushed_at: string | null; archived?: boolean }>;
+    for (const r of batch) if (!r.archived) out.push({ repo: r.full_name, private: r.private, description: r.description, pushedAt: r.pushed_at });
+    if (batch.length < 100) break;
+  }
+  return out;
+}
+
+/** One repo's default branch, or undefined when the token can't see it. */
+export async function getRepo(repo: string): Promise<{ repo: string; baseBranch: string } | undefined> {
+  const res = await gh(`/repos/${repo}`, {}, repo);
+  if (!res.ok) return undefined;
+  const body = (await res.json()) as { full_name: string; default_branch?: string };
+  return { repo: body.full_name, baseBranch: body.default_branch ?? "main" };
+}
+
 /**
  * Create a private repo for the token's account (needs the token's "Administration: write" permission).
  * Returns undefined when the token isn't allowed to, so the caller can fall back to the PC.

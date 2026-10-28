@@ -38,10 +38,20 @@ function deployLine(p: ProjectConfig): string {
   return p.autoDeploy ? "\nThis project deploys to Vercel on its own when the job finishes; don't call vercel_deploy for it unless the user wants a deploy sooner or a preview." : "";
 }
 
+/** How the orchestrator may use leads; a 3-tier job requires them. */
+function tiersLine(job: JobRecord): string {
+  if (job.shape === "three-tier")
+    return `
+This job is set to a 3-TIER team: you -> leads -> workers. Every item in team_plan must be a lead (lead: true) that owns one broad area.
+Each lead splits its area among its own workers, reviews and merges them, then reports done to you; you review each lead's combined work (review_diff), approve or request changes, then do the final check.`;
+  return `
+For big tasks you can add a middle tier: mark a plan item lead: true. A lead owns a broad area, splits it among its own workers, reviews and merges them, then reports done to you, so you review one combined diff per area. Use leads when an area needs 2+ parallel workers; otherwise plain workers are simpler.`;
+}
+
 export function orchestratorPrompt(job: JobRecord, project: ProjectConfig): string {
   if (job.lite) return orchestratorLite(job, project) + deployLine(project);
   const workers = job.workers === "auto" ? "Choose 1-15 workers. Use as few as the task needs (1 is fine for small tasks); split big tasks wide so they finish fast." : `Use exactly ${job.workers} worker(s).`;
-  return `${COMMON}
+  return `${COMMON}${tiersLine(job)}
 # Your role: ORCHESTRATOR (project ${project.name}, repo ${project.repo})
 
 You plan the work, assign it, review it, and report to the user. You never edit files yourself.
@@ -62,7 +72,7 @@ board_approve and job_finish refuse to proceed while checks fail.${deployLine(pr
 
 function orchestratorLite(job: JobRecord, project: ProjectConfig): string {
   const workers = job.workers === "auto" ? "Use 1 worker unless the task clearly splits into large independent parts." : `Use exactly ${job.workers} worker(s).`;
-  return `${COMMON_LITE}
+  return `${COMMON_LITE}${job.shape === "three-tier" ? "\n3-TIER job: every team_plan item must be a lead (lead: true) owning one area; leads split, review and merge their own workers, then report to you." : ""}
 # Role: ORCHESTRATOR (project ${project.name}, repo ${project.repo}). You never edit files.
 1. Look only at what you need to plan, then call team_plan. ${workers} Give workers non-overlapping path globs covering everything they edit.
 2. End your turn; you'll be messaged when workers report done or need you.
@@ -73,24 +83,56 @@ Checks: ${checksLine(project)}. board_approve and job_finish refuse while checks
 }
 
 export function workerPrompt(job: JobRecord, project: ProjectConfig, rec: AgentRecord): string {
+  // Who reviews and merges this worker: the orchestrator, or (3-tier) its lead.
+  const boss = rec.parent && rec.parent !== "orchestrator" ? `your lead "${rec.parent}"` : "the orchestrator";
+  const to = rec.parent ?? "orchestrator";
   if (job.lite)
     return `${COMMON_LITE}
 # Role: WORKER "${rec.id}" (project ${project.name}). You may edit only: ${rec.globs.join(", ")}
 Own git worktree, branch ${rec.branch}. Do the task with minimal changes (tests only where the task needs them).
 Need a file you don't own: board_request_files. Need merged work: sync_with_main.
-When done: board_report_done with a one-line summary (checks: ${checksLine(project)}). Blocked: board_post to the orchestrator.
+When done: board_report_done with a one-line summary (checks: ${checksLine(project)}); ${boss} reviews it. Blocked: board_post to "${to}".
 `;
   return `${COMMON}
 # Your role: WORKER "${rec.id}" (project ${project.name})
 
 You own these paths and may edit only them: ${rec.globs.join(", ")}
 You are in your own git worktree on branch ${rec.branch}. Other workers edit other paths in parallel.
+You report to ${boss}.
 
 - Do your task completely, including tests for what you change.
 - Need a file you don't own? Call board_request_files with a reason, or coordinate with its owner via board_post.
-- Need another worker's merged changes? Call sync_with_main.
-- When done, call board_report_done with a short summary. Checks (${checksLine(project)}) run automatically, and the orchestrator reviews your diff and may send it back with notes.
-- Don't end your turn without board_report_done unless you're blocked. If you're blocked, say why with board_post to the orchestrator.
+- Need other workers' merged changes? Call sync_with_main.
+- When done, call board_report_done with a short summary. Checks (${checksLine(project)}) run automatically, and ${boss} reviews your diff and may send it back with notes.
+- Don't end your turn without board_report_done unless you're blocked. If you're blocked, say why with board_post to "${to}".
+`;
+}
+
+/** The middle tier of a 3-tier team: a mini orchestrator for one area of the repo. */
+export function leadPrompt(job: JobRecord, project: ProjectConfig, rec: AgentRecord): string {
+  const cap = job.reviewCap;
+  if (job.lite)
+    return `${COMMON_LITE}
+# Role: LEAD "${rec.id}" (project ${project.name}). Your area: ${rec.globs.join(", ")}. You never edit files.
+1. Look only at what you need, then team_spawn_worker for each piece (globs inside your area, no overlaps). Use as few workers as the area needs.
+2. End your turn; you'll be messaged when they report done.
+3. review_diff once each; board_approve (merges into your branch ${rec.branch}) or board_request_changes (cap ${cap}).
+4. When all are merged: board_report_done with a 1-2 line summary; the orchestrator reviews your branch.
+`;
+  return `${COMMON}
+# Your role: LEAD "${rec.id}" (project ${project.name}, repo ${project.repo})
+
+You are the middle tier of a 3-tier team: the orchestrator gave you an area, you run a small team for it.
+Your area (you may hand these paths to your workers): ${rec.globs.join(", ")}
+Your branch: ${rec.branch}. You never edit files yourself.
+
+Workflow:
+1. Explore your area enough to split it (Read/Grep/Glob).
+2. Call team_spawn_worker for each piece of work: a clear task with acceptance criteria and non-overlapping globs inside your area. Use as few workers as the area needs; split wide when pieces are independent.
+3. End your turn and wait. You'll be messaged when your workers report done, request files, or get stuck.
+4. When a worker reports done, call review_diff and review it critically: correctness, edge cases, tests, scope. Then board_approve (merges it into your branch) or board_request_changes with specific notes. The review cap is ${cap} rounds per worker.
+5. When all your workers are merged, call board_report_done with a short summary of the whole area. Checks run on your branch and the orchestrator reviews it. If it requests changes, spawn a worker (new name) or message an existing one to fix them, review and merge again, then report done again.
+- Need paths outside your area? board_request_files (asks the orchestrator). Need other leads' merged work? sync_with_main.
 `;
 }
 

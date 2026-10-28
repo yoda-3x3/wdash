@@ -25,7 +25,7 @@ import {
   type AttentionReason,
 } from "@wdash/shared";
 import { AgentRunner, type AgentHost, type ApprovalOutcome } from "./agent.js";
-import { chatServer, orchestratorServer, workerServer, type PlannedWorker, type TeamApi } from "./board.js";
+import { chatServer, leadServer, orchestratorServer, workerServer, type PlannedWorker, type TeamApi } from "./board.js";
 import { runChecks, type CheckResult } from "./checks.js";
 import { env } from "./config.js";
 import * as G from "./git.js";
@@ -33,7 +33,7 @@ import { clear, clearJob, raise } from "./notify.js";
 import { conflictingClaims, globsOverlap, inside, type PolicyContext } from "./permissions.js";
 import { OTHER_REPOS_DIR, openRepo, pushRepo } from "./otherRepos.js";
 import { vercelConfigured, vercelDeploy, vercelProjectName } from "./vercel.js";
-import { chatPrompt, orchestratorPrompt, workerPrompt } from "./prompts.js";
+import { chatPrompt, leadPrompt, orchestratorPrompt, workerPrompt } from "./prompts.js";
 import type { Relay } from "./relay.js";
 
 export type Mode = "home" | "cloud";
@@ -54,7 +54,14 @@ type WorkerState = {
   helpAsked?: boolean;
   /** Set on a helper: the slow worker it took work from. */
   helps?: string;
+  /** Who reviews and merges it: the orchestrator, or (3-tier) the lead it works under. */
+  parent: string;
 };
+
+/** Workers and leads both have their own branch, get reviewed, and are merged by their parent. */
+function isTeamMember(role: string): boolean {
+  return role === "worker" || role === "lead";
+}
 
 /** At most this many helpers per slow worker. */
 const MAX_HELPERS = 5;
@@ -110,6 +117,36 @@ export class JobRunner implements AgentHost, TeamApi {
 
   private wtPath(agentId: string): string {
     return join(env().WDASH_STATE_DIR, "worktrees", this.jobId, agentId);
+  }
+
+  // ---- 3-tier: every worker or lead has a parent (the orchestrator or a lead) that reviews and merges it.
+
+  private parentOf(id: string): string {
+    return this.workers.get(id)?.parent ?? this.agents.get(id)?.rec.parent ?? ORCH;
+  }
+
+  /** The branch an agent starts from, syncs with and is diffed against: the job branch, or its lead's. */
+  private parentBranch(id: string): string {
+    const p = this.parentOf(id);
+    return p === ORCH ? branchFor.main(this.jobId) : (this.agents.get(p)?.rec.branch ?? branchFor.worker(this.jobId, p));
+  }
+
+  /** The worktree an agent's approved work is merged into. */
+  private parentWorktree(id: string): string {
+    const p = this.parentOf(id);
+    if (p === ORCH) return this.mainWt;
+    const lead = this.agents.get(p);
+    if (!lead) throw new Error(`Lead ${p} isn't running.`);
+    return lead.cwd;
+  }
+
+  /** Only an agent's own parent may review, approve, or send it back. */
+  private assertParent(agentId: string, by: string): void {
+    if (this.parentOf(agentId) !== by) throw new Error(`${agentId} reports to ${this.parentOf(agentId)}, not ${by}.`);
+  }
+
+  private promptFor(rec: AgentRecord): string {
+    return rec.role === "lead" ? leadPrompt(this.job, this.project, rec) : workerPrompt(this.job, this.project, rec);
   }
 
   // =====================================================================
@@ -239,22 +276,24 @@ export class JobRunner implements AgentHost, TeamApi {
       // Stops raised by the previous runner no longer apply; new ones are raised if they recur.
       await clear(this.relay, this.jobId, "agent_error", rec.id);
       await clear(this.relay, this.jobId, "stalled", rec.id);
-      if (rec.role === "worker" && rec.status === "done") {
+      if (isTeamMember(rec.role) && rec.status === "done") {
         // Approved and merged earlier; nothing to resume.
         continue;
       }
       let cwd = this.mainWt;
-      if (rec.role === "worker") {
-        cwd = await G.addWorktree(this.repoDir, this.wtPath(rec.id), branchFor.worker(this.jobId, rec.id), branchFor.main(this.jobId));
+      if (isTeamMember(rec.role)) {
+        const parent = rec.parent ?? ORCH;
+        const base = parent === ORCH ? branchFor.main(this.jobId) : branchFor.worker(this.jobId, parent);
+        cwd = await G.addWorktree(this.repoDir, this.wtPath(rec.id), branchFor.worker(this.jobId, rec.id), base);
         await this.syncAttachments(cwd);
-        this.workers.set(rec.id, { rounds: rec.reviewRounds, failedChecks: 0, approved: false, idleNudges: 0, startedAt: Date.now() });
+        this.workers.set(rec.id, { rounds: rec.reviewRounds, failedChecks: 0, approved: false, idleNudges: 0, startedAt: Date.now(), parent });
       }
       const prompt =
         rec.role === "orchestrator"
           ? orchestratorPrompt(this.job, this.project)
           : rec.role === "chat"
             ? chatPrompt(this.job, this.project, this.scratch)
-            : workerPrompt(this.job, this.project, rec);
+            : this.promptFor(rec);
       const runner = this.makeRunner(rec, cwd, prompt);
       if (this.job.reopened) {
         // The job had finished; the user wrote again. Their message arrives next from the command stream.
@@ -445,7 +484,7 @@ export class JobRunner implements AgentHost, TeamApi {
         await clear(this.relay, this.jobId, "usage_limit");
         await this.relay.setStatus(this.jobId, "running");
         for (const a of this.agents.values()) {
-          if (["failed", "stopped", "idle", "running"].includes(a.rec.status) && !(a.rec.role === "worker" && this.workers.get(a.id)?.approved)) {
+          if (["failed", "stopped", "idle", "running"].includes(a.rec.status) && !(isTeamMember(a.rec.role) && this.workers.get(a.id)?.approved)) {
             if (a.rec.status === "failed") await a.restart("[wdash] Resuming after an error. Check where you were and continue.");
             else a.send("[wdash] The user resumed the job. Continue where you left off.");
           }
@@ -481,7 +520,7 @@ export class JobRunner implements AgentHost, TeamApi {
         await clear(this.relay, this.jobId, "review_cap", cmd.agentId);
         await clear(this.relay, this.jobId, "checks_failing", cmd.agentId);
         const msg = await this.mergeWorker(cmd.agentId, true);
-        this.agents.get(this.lead)?.send(`[user] The user accepted ${cmd.agentId}'s work as-is. ${msg}`);
+        this.agents.get(this.parentOf(cmd.agentId))?.send(`[user] The user accepted ${cmd.agentId}'s work as-is. ${msg}`);
         return;
       }
       case "guidance": {
@@ -579,15 +618,16 @@ export class JobRunner implements AgentHost, TeamApi {
     if (Date.now() - this.lastCheckpointAt > 60_000) await this.checkpoint("turn").catch((e) => console.error("checkpoint", e));
     if (await this.checkBudget()) return;
 
-    if (agent.rec.role === "worker") {
+    if (isTeamMember(agent.rec.role)) {
       const ws = this.workers.get(agent.id);
-      if (ws && !ws.approved && !ws.awaitingReview && agent.rec.status === "idle") {
+      const waitingOnOwnWorkers = agent.rec.role === "lead" && [...this.workers.values()].some((w) => w.parent === agent.id && !w.approved);
+      if (ws && !ws.approved && !ws.awaitingReview && !waitingOnOwnWorkers && agent.rec.status === "idle") {
         // A worker that stops without reporting done gets one automatic nudge, then the orchestrator decides.
         if (ws.idleNudges < 1) {
           ws.idleNudges++;
           agent.send("[wdash] You ended your turn without calling board_report_done. If you're finished, report done; if you're blocked, message the orchestrator with board_post.");
         } else {
-          this.agents.get(this.lead)?.send(`[wdash] Worker ${agent.id} stopped without reporting done. Its last message: ${truncate(resultText(result), 1500)}`);
+          this.agents.get(ws.parent)?.send(`[wdash] ${agent.rec.role === "lead" ? "Lead" : "Worker"} ${agent.id} stopped without reporting done. Its last message: ${truncate(resultText(result), 1500)}`);
         }
       }
     }
@@ -634,6 +674,7 @@ export class JobRunner implements AgentHost, TeamApi {
 
   mcpServer(agent: AgentRunner): McpSdkServerConfigWithInstance {
     if (agent.rec.role === "chat") return chatServer(this, agent.id);
+    if (agent.rec.role === "lead") return leadServer(this, agent.id);
     return agent.rec.role === "orchestrator" ? orchestratorServer(this, agent.id) : workerServer(this, agent.id);
   }
 
@@ -664,19 +705,21 @@ export class JobRunner implements AgentHost, TeamApi {
     if (current && !["done", "stopped", "failed"].includes(current.rec.status)) return current;
     if (this.scratch || this.finishing) return undefined;
     const rec = current?.rec ?? (await this.relay.getAgents(this.jobId)).find((r) => r.id === name);
-    if (!rec || rec.role !== "worker") return undefined;
+    if (!rec || !isTeamMember(rec.role)) return undefined;
+    const parent = rec.parent ?? ORCH;
+    const base = parent === ORCH ? branchFor.main(this.jobId) : branchFor.worker(this.jobId, parent);
     const branch = rec.branch ?? branchFor.worker(this.jobId, name);
-    const cwd = await G.addWorktree(this.repoDir, this.wtPath(name), branch, branchFor.main(this.jobId));
-    await G.mergeInto(cwd, branchFor.main(this.jobId), "wdash: sync with job branch").catch(() => undefined);
+    const cwd = await G.addWorktree(this.repoDir, this.wtPath(name), branch, base);
+    await G.mergeInto(cwd, base, "wdash: sync with parent branch").catch(() => undefined);
     await this.syncAttachments(cwd);
     const prev = this.workers.get(name);
-    this.workers.set(name, { rounds: rec.reviewRounds, failedChecks: 0, approved: false, idleNudges: 0, startedAt: Date.now(), helps: prev?.helps, helpAsked: true });
+    this.workers.set(name, { rounds: rec.reviewRounds, failedChecks: 0, approved: false, idleNudges: 0, startedAt: Date.now(), helps: prev?.helps, helpAsked: true, parent });
     await this.relay.setClaims(this.jobId, name, rec.globs);
     rec.status = "starting";
-    const runner = this.makeRunner(rec, cwd, workerPrompt(this.job, this.project, rec));
+    const runner = this.makeRunner(rec, cwd, this.promptFor(rec));
     await runner.save();
     runner.start(
-      `[wdash] You finished earlier and your work was merged; you've been woken up (${why}). Your worktree has the latest job branch. ` +
+      `[wdash] You finished earlier and your work was merged; you've been woken up (${why}). Your worktree has the latest work from ${parent === ORCH ? "the job branch" : `your lead ${parent}`}. ` +
         `Do what's asked; if you change files, call board_report_done again when finished.`,
     );
     await this.info(`Woke ${name} (${why}).`);
@@ -702,6 +745,8 @@ export class JobRunner implements AgentHost, TeamApi {
   async submitPlan(summary: string, workers: PlannedWorker[]): Promise<string> {
     const fixed = this.job.workers === "auto" ? undefined : Number(this.job.workers);
     if (fixed && workers.length !== fixed) throw new Error(`The user asked for exactly ${fixed} worker(s); your plan has ${workers.length}.`);
+    if (this.job.shape === "three-tier" && workers.some((w) => !w.lead))
+      throw new Error("This job is set to a 3-tier team: mark every plan item lead: true (each lead splits its area among its own workers).");
     const names = new Set<string>();
     for (const w of workers) {
       if (names.has(w.name) || w.name === ORCH || w.name === "main" || this.agents.has(w.name)) throw new Error(`Duplicate or reserved worker name: ${w.name}`);
@@ -717,7 +762,7 @@ export class JobRunner implements AgentHost, TeamApi {
     if (workers.length >= 3) {
       this.pendingPlan = { summary, workers };
       await this.relay.setStatus(this.jobId, "awaiting_plan_approval");
-      const detail = `${summary}\n\n${workers.map((w) => `• ${w.name} — ${w.globs.join(", ")}`).join("\n")}`;
+      const detail = `${summary}\n\n${workers.map((w) => `• ${w.name}${w.lead ? " (lead)" : ""} — ${w.globs.join(", ")}`).join("\n")}`;
       await this.notify("plan_approval", { agentId: this.lead, detail: truncate(detail, 800) });
       return "Plan submitted. It has 3+ workers, so it waits for the user's approval. End your turn now; you'll get a message when it's approved or edited.";
     }
@@ -730,43 +775,62 @@ export class JobRunner implements AgentHost, TeamApi {
     for (const w of workers) await this.spawnWorker(w);
   }
 
-  async spawnWorker(w: PlannedWorker): Promise<string> {
-    if (this.agents.has(w.name)) throw new Error(`Worker ${w.name} already exists.`);
+  async spawnWorker(w: PlannedWorker, by: string = ORCH): Promise<string> {
+    if (this.agents.has(w.name) || w.name === ORCH || w.name === "main") throw new Error(`Name ${w.name} is taken.`);
     if (this.workers.size >= MAX_WORKERS) throw new Error(`This job already has ${MAX_WORKERS} workers (the cap).`);
+    const byLead = by !== ORCH;
+    if (byLead) {
+      const lead = this.agents.get(by);
+      if (!lead || lead.rec.role !== "lead") throw new Error("Only the orchestrator and leads can spawn workers.");
+      if (w.lead) throw new Error("A lead's workers can't be leads themselves (3 tiers at most).");
+      const outside = w.globs.filter((g) => !lead.rec.globs.some((lg) => globsOverlap(g, lg)));
+      if (outside.length) throw new Error(`Outside your area (${lead.rec.globs.join(", ")}): ${outside.join(", ")}. Ask the orchestrator with board_request_files.`);
+    }
     const claims = await this.relay.getClaims(this.jobId);
     if (w.helps) {
-      const parent = this.workers.get(w.helps);
-      if (!parent || !this.agents.has(w.helps)) throw new Error(`No worker ${w.helps} to help.`);
-      if (parent.helps) throw new Error(`${w.helps} is itself a helper; split the original worker's work instead.`);
+      const helped = this.workers.get(w.helps);
+      if (!helped || !this.agents.has(w.helps)) throw new Error(`No worker ${w.helps} to help.`);
+      if (helped.helps) throw new Error(`${w.helps} is itself a helper; split the original worker's work instead.`);
+      if (helped.parent !== by) throw new Error(`${w.helps} reports to ${helped.parent}; only it can add helpers for ${w.helps}.`);
       const helpers = [...this.workers.values()].filter((x) => x.helps === w.helps).length;
       if (helpers >= MAX_HELPERS) throw new Error(`${w.helps} already has ${MAX_HELPERS} helpers.`);
     }
-    // A helper may take paths from the worker it helps; no one else's.
-    const others = w.helps ? Object.fromEntries(Object.entries(claims).filter(([, owner]) => owner !== w.helps)) : claims;
+    // A helper may take paths from the worker it helps, and a lead's worker from its lead's area; no one else's.
+    const lender = w.helps ?? (byLead ? by : undefined);
+    const others = lender ? Object.fromEntries(Object.entries(claims).filter(([, owner]) => owner !== lender)) : claims;
     const conflicts = conflictingClaims(others, w.globs, w.name);
     if (conflicts.length) throw new Error(`Ownership conflicts: ${conflicts.join("; ")}`);
     const preset = MODEL_PRESETS[this.job.models];
     const branch = branchFor.worker(this.jobId, w.name);
-    const cwd = await G.addWorktree(this.repoDir, this.wtPath(w.name), branch, branchFor.main(this.jobId));
+    const base = byLead ? this.agents.get(by)!.rec.branch ?? branchFor.worker(this.jobId, by) : branchFor.main(this.jobId);
+    if (byLead) await G.checkpointCommit(this.agents.get(by)!.cwd, `wdash: ${by} before spawning ${w.name}`).catch(() => undefined);
+    const cwd = await G.addWorktree(this.repoDir, this.wtPath(w.name), branch, base);
     await this.syncAttachments(cwd);
+    const role = w.lead ? "lead" : "worker";
     const rec: AgentRecord = {
       id: w.name,
-      role: "worker",
-      model: preset.worker,
+      role,
+      model: role === "lead" ? preset.lead : preset.worker,
       name: w.name,
       task: w.task,
       globs: w.globs,
       status: "starting",
       branch,
+      parent: by,
       reviewRounds: 0,
       lastEventAt: Date.now(),
       costUsd: 0,
     };
     await this.relay.setClaims(this.jobId, w.name, w.globs);
-    this.workers.set(w.name, { rounds: 0, failedChecks: 0, approved: false, idleNudges: 0, startedAt: Date.now(), helps: w.helps });
-    const runner = this.makeRunner(rec, cwd, workerPrompt(this.job, this.project, rec));
+    this.workers.set(w.name, { rounds: 0, failedChecks: 0, approved: false, idleNudges: 0, startedAt: Date.now(), helps: w.helps, parent: by });
+    const runner = this.makeRunner(rec, cwd, this.promptFor(rec));
     await runner.save();
-    runner.start(`# Your task\n\n${w.task}\n\nYou own: ${w.globs.join(", ")}. When finished, call board_report_done.`);
+    runner.start(
+      role === "lead"
+        ? `# Your area\n\n${w.task}\n\nYou own: ${w.globs.join(", ")}. Split it among your own workers with team_spawn_worker, review and merge them, then call board_report_done.`
+        : `# Your task\n\n${w.task}\n\nYou own: ${w.globs.join(", ")}. When finished, call board_report_done.`,
+    );
+    if (byLead) await this.info(`Lead ${by} started worker ${w.name} on ${w.globs.join(", ")}.`);
     if (w.helps) {
       this.agents
         .get(w.helps)
@@ -776,22 +840,30 @@ export class JobRunner implements AgentHost, TeamApi {
     return `Spawned ${w.name}.`;
   }
 
-  async grantFiles(agentId: string, globs: string[]): Promise<string> {
+  async grantFiles(agentId: string, globs: string[], by: string = ORCH): Promise<string> {
     const a = this.agents.get(agentId);
-    if (!a || a.rec.role !== "worker") throw new Error(`No worker ${agentId}`);
-    const conflicts = conflictingClaims(await this.relay.getClaims(this.jobId), globs, agentId);
+    if (!a || !isTeamMember(a.rec.role)) throw new Error(`No worker ${agentId}`);
+    this.assertParent(agentId, by);
+    let claims = await this.relay.getClaims(this.jobId);
+    if (by !== ORCH) {
+      const lead = this.agents.get(by)!;
+      const outside = globs.filter((g) => !lead.rec.globs.some((lg) => globsOverlap(g, lg)));
+      if (outside.length) throw new Error(`Outside your area: ${outside.join(", ")}. Ask the orchestrator with board_request_files.`);
+      claims = Object.fromEntries(Object.entries(claims).filter(([, owner]) => owner !== by));
+    }
+    const conflicts = conflictingClaims(claims, globs, agentId);
     if (conflicts.length) throw new Error(`Can't grant, already owned: ${conflicts.join("; ")}`);
     await this.relay.setClaims(this.jobId, agentId, globs);
     a.rec.globs = [...new Set([...a.rec.globs, ...globs])];
     await a.save();
-    a.send(`[board] from orchestrator: You now also own ${globs.join(", ")}.`);
+    a.send(`[board] from ${by}: You now also own ${globs.join(", ")}.`);
     return `Granted ${globs.join(", ")} to ${agentId}.`;
   }
 
-  async denyFiles(agentId: string, reason: string): Promise<string> {
+  async denyFiles(agentId: string, reason: string, by: string = ORCH): Promise<string> {
     const a = this.agents.get(agentId);
     if (!a) throw new Error(`No agent ${agentId}`);
-    a.send(`[board] from orchestrator: File request denied: ${reason}`);
+    a.send(`[board] from ${by}: File request denied: ${reason}`);
     return "Denied.";
   }
 
@@ -799,15 +871,20 @@ export class JobRunner implements AgentHost, TeamApi {
     const claims = await this.relay.getClaims(this.jobId);
     const conflicts = conflictingClaims(claims, globs, fromId);
     const note = conflicts.length ? ` Note: overlaps existing claims: ${conflicts.join("; ")}.` : "";
-    this.agents.get(this.lead)?.send(`[board] from ${fromId}: requests files ${globs.join(", ")} — ${reason}.${note} Use board_grant_files or board_deny_files.`);
-    await this.relay.emit({ jobId: this.jobId, agentId: fromId, type: "board", payload: { from: fromId, to: this.lead, text: `Requests files ${globs.join(", ")}: ${reason}` } });
-    return "Request sent to the orchestrator. Work on something else or end your turn until you hear back.";
+    const to = this.parentOf(fromId);
+    this.agents.get(to)?.send(`[board] from ${fromId}: requests files ${globs.join(", ")} — ${reason}.${note} Use board_grant_files or board_deny_files.`);
+    await this.relay.emit({ jobId: this.jobId, agentId: fromId, type: "board", payload: { from: fromId, to, text: `Requests files ${globs.join(", ")}: ${reason}` } });
+    return `Request sent to ${to}. Work on something else or end your turn until you hear back.`;
   }
 
   async reportDone(fromId: string, summary: string): Promise<string> {
     const a = this.agents.get(fromId);
     const ws = this.workers.get(fromId);
-    if (!a || !ws) throw new Error("Only workers can report done.");
+    if (!a || !ws) throw new Error("Only workers and leads can report done.");
+    if (a.rec.role === "lead") {
+      const open = [...this.workers.entries()].filter(([, s]) => s.parent === fromId && !s.approved).map(([n]) => n);
+      if (open.length) throw new Error(`Your workers aren't all merged yet: ${open.join(", ")}. Review and approve them first.`);
+    }
     await G.checkpointCommit(a.cwd, `wdash: ${fromId} done — ${summary.slice(0, 60)}`);
     const sha = await G.head(a.cwd);
     await a.setStatus("reviewing");
@@ -820,28 +897,30 @@ export class JobRunner implements AgentHost, TeamApi {
     if (!passed && ws.failedChecks >= 2) {
       await this.notify("checks_failing", { agentId: fromId, detail: checksSummary(results) });
     }
-    this.agents.get(this.lead)?.send(
-      `[board] ${fromId} reports done: ${summary}\nChecks at ${sha.slice(0, 8)}: ${checksSummary(results)}\nReview with review_diff, then board_approve or board_request_changes.`,
+    this.agents.get(ws.parent)?.send(
+      `[board] ${a.rec.role === "lead" ? "Lead " : ""}${fromId} reports done: ${summary}\nChecks at ${sha.slice(0, 8)}: ${checksSummary(results)}\nReview with review_diff, then board_approve or board_request_changes.`,
     );
     return passed
-      ? "Reported. Checks passed. The orchestrator will review; end your turn now."
+      ? `Reported. Checks passed. ${ws.parent === ORCH ? "The orchestrator" : `Your lead ${ws.parent}`} will review; end your turn now.`
       : `Reported, but checks FAILED: ${checksSummary(results)}. Fix them now unless the orchestrator tells you otherwise.`;
   }
 
-  async reviewDiff(agentId: string): Promise<string> {
+  async reviewDiff(agentId: string, by: string = ORCH): Promise<string> {
     const a = this.agents.get(agentId);
-    if (!a || a.rec.role !== "worker") throw new Error(`No worker ${agentId}`);
-    const d = await G.diffAgainst(a.cwd, branchFor.main(this.jobId));
+    if (!a || !isTeamMember(a.rec.role)) throw new Error(`No worker ${agentId}`);
+    this.assertParent(agentId, by);
+    const d = await G.diffAgainst(a.cwd, this.parentBranch(agentId));
     await this.relay.emit({ jobId: this.jobId, agentId, type: "diff", payload: { branch: a.rec.branch, files: d.files, stat: d.stat, patch: d.patch } });
     const ws = this.workers.get(agentId);
     const checks = ws?.lastChecks ? `Checks at ${ws.lastChecks.sha.slice(0, 8)}: ${checksSummary(ws.lastChecks.results)}` : "No checks run yet.";
     return `${checks}\nReview round ${ws?.rounds ?? 0}/${this.job.reviewCap}\n\n${d.stat}\n\n${truncate(d.patch, this.job.lite ? 20_000 : 60_000)}`;
   }
 
-  async requestChanges(agentId: string, notes: string): Promise<string> {
+  async requestChanges(agentId: string, notes: string, by: string = ORCH): Promise<string> {
     const a = this.agents.get(agentId);
     const ws = this.workers.get(agentId);
     if (!a || !ws) throw new Error(`No worker ${agentId}`);
+    this.assertParent(agentId, by);
     ws.rounds++;
     a.rec.reviewRounds = ws.rounds;
     await a.save();
@@ -853,14 +932,15 @@ export class JobRunner implements AgentHost, TeamApi {
     ws.idleNudges = 0;
     ws.awaitingReview = false;
     await a.setStatus("running");
-    a.send(`[review round ${ws.rounds}/${this.job.reviewCap}] The orchestrator requests changes:\n${notes}\n\nFix them and call board_report_done again.`);
+    a.send(`[review round ${ws.rounds}/${this.job.reviewCap}] ${by === ORCH ? "The orchestrator" : `Your lead ${by}`} requests changes:\n${notes}\n\n${a.rec.role === "lead" ? "Get them fixed by your workers, merge, and call board_report_done again." : "Fix them and call board_report_done again."}`);
     return `Sent back to ${agentId} (round ${ws.rounds}/${this.job.reviewCap}).`;
   }
 
-  async approve(agentId: string): Promise<string> {
+  async approve(agentId: string, by: string = ORCH): Promise<string> {
     const a = this.agents.get(agentId);
     const ws = this.workers.get(agentId);
     if (!a || !ws) throw new Error(`No worker ${agentId}`);
+    this.assertParent(agentId, by);
     const sha = await G.head(a.cwd);
     if (!ws.lastChecks || ws.lastChecks.sha !== sha) throw new Error(`${agentId} has no check results for its current commit. Ask it to board_report_done.`);
     if (!checksPass(ws.lastChecks.results)) throw new Error(`Checks are failing for ${agentId}: ${checksSummary(ws.lastChecks.results)}. Request changes instead.`);
@@ -873,15 +953,21 @@ export class JobRunner implements AgentHost, TeamApi {
     const ws = this.workers.get(agentId);
     if (!a || !ws) throw new Error(`No worker ${agentId}`);
     await G.checkpointCommit(a.cwd, `wdash: ${agentId} final`);
-    const res = await G.mergeInto(this.mainWt, a.rec.branch!, `wdash: merge ${agentId}${forced ? " (accepted by user)" : ""}`);
+    const target = this.parentWorktree(agentId);
+    const res = await G.mergeInto(target, a.rec.branch!, `wdash: merge ${agentId}${forced ? " (accepted by user)" : ""}`);
     if (!res.ok) {
       return `Merge conflict merging ${agentId}: ${res.conflicts.join(", ")}. Ask ${agentId} to call sync_with_main and resolve, then report done again.`;
     }
     ws.approved = true;
     await a.stop("done");
-    this.finalChecks = undefined;
     await this.checkpoint("merge");
-    const left = [...this.workers.entries()].filter(([, s]) => !s.approved).map(([n]) => n);
+    if (ws.parent !== ORCH) {
+      // Merged into a lead's branch: the lead reports its whole area once all its workers are in.
+      const mine = [...this.workers.entries()].filter(([, s]) => s.parent === ws.parent && !s.approved).map(([n]) => n);
+      return `Merged ${agentId} into your branch. ${mine.length ? `Still open: ${mine.join(", ")}.` : "All your workers are merged: call board_report_done with a summary of your area."}`;
+    }
+    this.finalChecks = undefined;
+    const left = [...this.workers.entries()].filter(([, s]) => !s.approved && s.parent === ORCH).map(([n]) => n);
     return `Merged ${agentId} into the job branch. ${left.length ? `Still open: ${left.join(", ")}.` : "All workers merged: run job_final_check, review the combined result, then job_finish."}`;
   }
 
@@ -889,9 +975,14 @@ export class JobRunner implements AgentHost, TeamApi {
     const a = this.agents.get(fromId);
     if (!a) throw new Error("unknown agent");
     await G.checkpointCommit(a.cwd, `wdash: ${fromId} before sync`);
-    const res = await G.mergeInto(a.cwd, branchFor.main(this.jobId), "wdash: sync with job branch");
-    if (res.ok) return "Merged the job branch into yours.";
-    return `Conflicts in ${res.conflicts.join(", ")}; the merge was aborted. Ask the orchestrator for help or for ownership of those files.`;
+    const parent = this.parentOf(fromId);
+    if (parent !== ORCH) {
+      const lead = this.agents.get(parent);
+      if (lead) await G.checkpointCommit(lead.cwd, `wdash: ${parent} before ${fromId} syncs`).catch(() => undefined);
+    }
+    const res = await G.mergeInto(a.cwd, this.parentBranch(fromId), `wdash: sync with ${parent === ORCH ? "job branch" : `${parent}'s branch`}`);
+    if (res.ok) return parent === ORCH ? "Merged the job branch into yours." : `Merged your lead ${parent}'s branch into yours.`;
+    return `Conflicts in ${res.conflicts.join(", ")}; the merge was aborted. Ask ${parent} for help or for ownership of those files.`;
   }
 
   async finalCheck(): Promise<string> {
@@ -1090,8 +1181,9 @@ export class JobRunner implements AgentHost, TeamApi {
       if (!["running", "starting", "idle"].includes(a.rec.status) || Date.now() - ws.startedAt < after) continue;
       ws.helpAsked = true;
       const mins = Math.round((Date.now() - ws.startedAt) / 60_000);
-      await this.info(`${name} has been working for ${mins} min; asking the orchestrator to split its work across helpers.`);
-      this.agents.get(this.lead)?.send(
+      await this.info(`${name} has been working for ${mins} min; asking ${ws.parent} to split its work across helpers.`);
+      if (a.rec.role === "lead") continue; // a lead's own workers get helpers, not the lead
+      this.agents.get(ws.parent)?.send(
         `[wdash] Worker ${name} has been working for ${mins} minutes on: ${truncate(a.rec.task, 400)}\n` +
           `It owns: ${a.rec.globs.join(", ")}. Speed it up: ask it (board_post) what's left, then spawn up to ${MAX_HELPERS} helper workers with team_spawn_worker, ` +
           `each with helps: "${name}", a clear slice of the remaining work, and a subset of ${name}'s paths (no two helpers on the same paths). ` +
@@ -1108,7 +1200,7 @@ export class JobRunner implements AgentHost, TeamApi {
     for (const a of this.agents.values()) {
       // A chat agent edits the job branch itself, so its work is checkpointed there.
       if (a.rec.role === "chat") await G.checkpointCommit(a.cwd, `wdash: checkpoint (${why})`).catch(() => undefined);
-      if (a.rec.role !== "worker") continue;
+      if (!isTeamMember(a.rec.role)) continue;
       branches.push(a.rec.branch!);
       await G.checkpointCommit(a.cwd, `wdash: checkpoint (${why})`).catch(() => undefined);
     }

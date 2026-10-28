@@ -69,3 +69,11 @@ test("edits inside a repo opened with open_repo are allowed for workers", () => 
   assert.equal(decide("Edit", { file_path: join(root, ".wdash/repos/me__other/src/a.ts") }, ctx).kind, "allow");
   assert.equal(decide("Edit", { file_path: join(root, ".wdash/attachments/x.pdf") }, ctx).kind, "deny");
 });
+
+test("a lead (3-tier) never edits, even paths in its own area", () => {
+  const lead: PolicyContext = { ...ctx, role: "lead", owned: ["src/**"] };
+  const d = decide("Edit", { file_path: join(root, "src/solver/x.ts") }, lead);
+  assert.equal(d.kind, "deny");
+  assert.match(d.kind === "deny" ? d.message : "", /lead doesn't edit files/);
+  assert.equal(decide("Read", { file_path: join(root, "src/solver/x.ts") }, lead).kind, "allow");
+});

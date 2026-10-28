@@ -3,13 +3,15 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { MAX_WORKERS, MODEL_PRESETS, NO_PROJECT, WORKER_CHOICES, type ChatModel, type JobKind, type ModelPreset, type ProjectConfig } from "@wdash/shared";
+import { MAX_WORKERS, MODEL_PRESETS, NO_PROJECT, WORKER_CHOICES, type ChatModel, type JobKind, type ModelPreset, type ProjectConfig, type TeamShape } from "@wdash/shared";
 import { api, usePoll } from "@/lib/client";
 import { useBoard } from "./Shell";
 import { AttachButton, FileChips, dropProps, useUploads } from "./Attachments";
 import { PREFS } from "./Home";
 
 const LAST_PROJECT = "wdash:lastProject";
+/** Project select value for a GitHub repo that isn't a project yet. */
+const REPO_PREFIX = "repo:";
 const AUTO_MODE = "wdash:autoMode";
 
 const CHAT_MODELS: Record<ChatModel, string> = { sonnet: "Sonnet", opus: "Opus", haiku: "Haiku" };
@@ -21,11 +23,16 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
   const { state } = useBoard();
   const { data } = usePoll<{ projects: ProjectConfig[] }>("/api/projects", 60_000);
   const projects = data?.projects ?? [];
+  // Every GitHub repo you have, so any of them can be picked; choosing one adopts it as a project on Start.
+  const { data: repoData } = usePoll<{ repos: Array<{ repo: string; private: boolean }> }>("/api/github/repos", 10 * 60_000);
+  const known = new Set(projects.map((p) => p.repo.toLowerCase()));
+  const otherRepos = (repoData?.repos ?? []).filter((r) => !known.has(r.repo.toLowerCase()));
 
   const [project, setProject] = useState("");
   const [task, setTask] = useState("");
   const [advanced, setAdvanced] = useState(false);
   const [workers, setWorkers] = useState("auto");
+  const [shape, setShape] = useState<TeamShape>("auto");
   const [models, setModels] = useState<ModelPreset>("sonnet-haiku");
   const [chatModel, setChatModel] = useState<ChatModel>("sonnet");
   const [autoMode, setAutoMode] = useState(false);
@@ -71,19 +78,26 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
     setBusy(true);
     setErr(undefined);
     try {
+      // A repo from "Your GitHub repos": make it a project first (cloud-ready now, the PC clones it).
+      let projectName = project;
+      if (project.startsWith(REPO_PREFIX)) {
+        const adopted = await api<{ project: string }>("/api/projects/adopt", { repo: project.slice(REPO_PREFIX.length) });
+        projectName = adopted.project;
+      }
       try {
-        localStorage.setItem(LAST_PROJECT, project);
+        localStorage.setItem(LAST_PROJECT, projectName);
         localStorage.setItem(AUTO_MODE, autoMode ? "1" : "0");
         localStorage.setItem(PREFS.lite, lite ? "1" : "0");
       } catch {
         /* ignore */
       }
       const res = await api<{ id: string }>("/api/jobs", {
-        project,
+        project: projectName,
         task: task.trim(),
         kind,
         chatModel,
         workers,
+        shape,
         models,
         runOn,
         reviewCap,
@@ -142,7 +156,20 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
               {p.name} — {p.repo}
             </option>
           ))}
+          {otherRepos.length > 0 && (
+            <optgroup label="Your GitHub repos">
+              {otherRepos.map((r) => (
+                <option key={r.repo} value={`${REPO_PREFIX}${r.repo}`}>
+                  {r.repo}
+                  {r.private ? " 🔒" : ""}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
+        {project.startsWith(REPO_PREFIX) && (
+          <span className="block text-xs text-muted">Not a project yet: Start adds it, and your PC clones it before running.</span>
+        )}
       </label>
       <label className="block space-y-1">
         <span className="text-sm font-medium">{chat ? "Your first message" : "What should the agents do?"}</span>
@@ -209,6 +236,12 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
                       {n}
                     </option>
                   ))}
+                </select>
+              </Field>
+              <Field label="Team shape">
+                <select className="input" value={shape} onChange={(e) => setShape(e.target.value as TeamShape)}>
+                  <option value="auto">Auto (orchestrator decides)</option>
+                  <option value="three-tier">3 tiers: orchestrator → leads → workers</option>
                 </select>
               </Field>
               <Field label="Models">

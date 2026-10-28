@@ -36,6 +36,10 @@ export async function runHome(): Promise<void> {
     const job = await relay.getJob(jobId);
     if (!job || TERMINAL_STATUSES.includes(job.status)) return;
     projects = loadLocalProjects();
+    // A repo picked on the website a moment ago may not be cloned here yet: handle pending project requests first.
+    if (job.project !== NO_PROJECT && !projects.some((p) => p.name === job.project)) {
+      if (await processProjectRequests(relay).catch(() => 0)) projects = loadLocalProjects();
+    }
     // A chat without a project runs in a scratch folder, not a checkout.
     const project = job.project === NO_PROJECT ? scratchProject() : projects.find((p) => p.name === job.project);
     if (!project || (job.project !== NO_PROJECT && !project.localPath)) {

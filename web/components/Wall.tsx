@@ -238,7 +238,7 @@ function Tile({
           </span>
         )}
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[agent.status] ?? "bg-[#7d8590]"}`} />
-        <span className={agent.role === "orchestrator" ? "text-[#c4b5fd]" : "text-[#67e8f9]"}>{agent.id}</span>
+        <span className={agent.role === "orchestrator" ? "text-[#c4b5fd]" : agent.role === "lead" ? "text-[#fcd34d]" : "text-[#67e8f9]"}>{agent.id}</span>
         <span className="truncate text-[#7d8590]">
           {projectLabel(job.project)} · {job.title}
         </span>

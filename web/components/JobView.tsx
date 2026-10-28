@@ -625,20 +625,22 @@ function Team({ job, agents, events, claims, onChange }: { job: JobRecord; agent
       )}
       <div className="grid gap-2 sm:grid-cols-2">
         {agents
-          .sort((a, b) => (a.role === "orchestrator" ? -1 : b.role === "orchestrator" ? 1 : a.id.localeCompare(b.id)))
+          .sort((a, b) => tierRank(a) - tierRank(b) || teamKey(a).localeCompare(teamKey(b)) || a.id.localeCompare(b.id))
           .map((a) => (
-            <div key={a.id} className="card space-y-1.5 p-3 text-sm">
+            <div key={a.id} className={`card space-y-1.5 p-3 text-sm ${a.parent && a.parent !== "orchestrator" ? "border-l-2 border-l-accent/40" : ""}`}>
               <div className="flex items-center gap-2">
                 <span className="font-mono font-medium">{a.id}</span>
+                {a.role === "lead" && <span className="rounded bg-accent/15 px-1.5 text-[10px] font-semibold uppercase text-accent">lead</span>}
+                {a.parent && a.parent !== "orchestrator" && <span className="text-[11px] text-muted">under {a.parent}</span>}
                 <span className="text-xs text-muted">{a.model}</span>
                 <span className="ml-auto">
                   <StatusChip status={a.status} />
                 </span>
               </div>
-              {a.role === "worker" && <p className="line-clamp-3 text-xs text-muted">{a.task}</p>}
+              {(a.role === "worker" || a.role === "lead") && <p className="line-clamp-3 text-xs text-muted">{a.task}</p>}
               {a.globs.length > 0 && <div className="font-mono text-[11px] text-muted">owns: {a.globs.join(", ")}</div>}
               <div className="flex gap-3 text-[11px] text-muted">
-                {a.role === "worker" && (
+                {(a.role === "worker" || a.role === "lead") && (
                   <span>
                     review {a.reviewRounds}/{job.reviewCap}
                   </span>
@@ -915,4 +917,14 @@ function ChatBox({ jobId, agents, lead, asking, reopen = false }: { jobId: strin
       </div>
     </form>
   );
+}
+
+/** Orchestrator first, then each lead followed by its own workers, then plain workers. */
+function tierRank(a: AgentRecord): number {
+  return a.role === "orchestrator" ? 0 : 1;
+}
+function teamKey(a: AgentRecord): string {
+  if (a.role === "lead") return `${a.id} 0`;
+  if (a.parent && a.parent !== "orchestrator") return `${a.parent} 1`;
+  return `~${a.id}`;
 }

@@ -5,7 +5,7 @@ import type { ProjectConfig } from "@wdash/shared";
 // SPEC.md §8. Pure policy so it can be unit tested; the daemon wires it into canUseTool.
 
 export type PolicyContext = {
-  role: "orchestrator" | "worker" | "chat";
+  role: "orchestrator" | "lead" | "worker" | "chat";
   agentId: string;
   /** Directory the agent works in (its git worktree). */
   root: string;
@@ -86,10 +86,10 @@ export function decide(tool: string, input: Record<string, unknown>, ctx: Policy
     if (!p) return { kind: "deny", message: "Edit without a file path." };
     if (!inside(ctx.root, p, ctx.platform)) return { kind: "deny", message: `Path is outside your worktree: ${p}` };
     const rel = toPosix(relative(ctx.root, resolve(ctx.root, p)));
-    if (ctx.role === "orchestrator") {
+    if (ctx.role === "orchestrator" || ctx.role === "lead") {
       return {
         kind: "deny",
-        message: "The orchestrator doesn't edit files. Spawn a worker (team_spawn_worker) that owns this path.",
+        message: `The ${ctx.role} doesn't edit files. Spawn a worker (team_spawn_worker) that owns this path.`,
       };
     }
     if (ownsPath(ctx.owned, rel)) return { kind: "allow" };

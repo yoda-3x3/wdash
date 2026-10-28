@@ -97,6 +97,7 @@ export async function createJob(input: NewJobInput, project: ProjectConfig): Pro
     reviewCap: input.lite ? 1 : input.reviewCap,
     autoMode: input.autoMode,
     lite: input.lite,
+    shape: input.shape,
     costUsd: 0,
     createdAt: now,
     updatedAt: now,
