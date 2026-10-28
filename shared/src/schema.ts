@@ -381,6 +381,15 @@ export const RateLimitInfo = z.object({
 });
 export type RateLimitInfo = z.infer<typeof RateLimitInfo>;
 
+/** Upstash free plan storage, which big attachments eat into (shown in the attach warning). */
+export const UPSTASH_FREE_STORAGE_BYTES = 256 * 1024 * 1024;
+/** Files at least this big get a storage warning when attached. */
+export const BIG_FILE_WARN_BYTES = 10 * 1024 * 1024;
+/** Stored size in Redis: pieces are base64, about 4/3 of the file. */
+export function storedBytes(fileBytes: number): number {
+  return Math.ceil(fileBytes / 3) * 4;
+}
+
 // ---------- Push ----------
 
 export const PushSubscriptionJson = z.object({

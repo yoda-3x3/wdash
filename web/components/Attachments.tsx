@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, type Attachment } from "@wdash/shared";
+import { BIG_FILE_WARN_BYTES, FILE_CHUNK_TTL_SECONDS, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, UPSTASH_FREE_STORAGE_BYTES, storedBytes, type Attachment } from "@wdash/shared";
 
 type Pending = { key: string; name: string; size: number; status: "uploading" | "ready" | "error"; meta?: Attachment; error?: string; percent?: number };
 
@@ -113,7 +113,12 @@ export function AttachButton({ onFiles, label = "Attach files", compact = false 
 
 export function FileChips({ items, onRemove }: { items: Pending[]; onRemove: (key: string) => void }) {
   if (!items.length) return null;
+  // Big files are stored in Redis (as base64, ~4/3 of their size) until their pieces expire.
+  const big = items.filter((x) => x.status !== "error" && x.size >= BIG_FILE_WARN_BYTES);
+  const stored = big.reduce((a, x) => a + storedBytes(x.size), 0);
+  const mb = (b: number) => Math.round(b / 1024 / 1024);
   return (
+    <>
     <ul className="flex flex-wrap gap-2">
       {items.map((x) => (
         <li
@@ -128,6 +133,13 @@ export function FileChips({ items, onRemove }: { items: Pending[]; onRemove: (ke
         </li>
       ))}
     </ul>
+    {big.length > 0 && (
+      <p className="rounded-lg border border-warn/50 bg-warn/10 px-2.5 py-1.5 text-xs text-warn">
+        ⚠ {big.length === 1 ? "This big file takes" : `These ${big.length} big files take`} about {mb(stored)} MB of your {mb(UPSTASH_FREE_STORAGE_BYTES)} MB free Upstash storage for{" "}
+        {FILE_CHUNK_TTL_SECONDS / 86400} days.{stored > UPSTASH_FREE_STORAGE_BYTES / 2 ? " That's over half of it, so another big upload may fail until these expire." : ""}
+      </p>
+    )}
+    </>
   );
 }
 
