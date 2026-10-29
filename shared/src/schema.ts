@@ -65,7 +65,7 @@ export const RunOn = z.enum(["auto", "home", "cloud"]);
 
 export const MergeState = z.enum(["none", "pending", "merged", "needs_merge", "left_as_branch", "discarded"]);
 
-export const ModelPreset = z.enum(["opus-sonnet", "opus-opus", "sonnet-haiku", "opus-sonnet-haiku", "kaggle"]);
+export const ModelPreset = z.enum(["opus-sonnet", "opus-opus", "sonnet-haiku", "opus-sonnet-haiku", "kaggle", "custom"]);
 export type ModelPreset = z.infer<typeof ModelPreset>;
 
 /** `lead`: the middle tier in a 3-tier team (orchestrator -> leads -> workers). */
@@ -76,14 +76,19 @@ export const MODEL_PRESETS: Record<ModelPreset, { orchestrator: string; lead: st
   "opus-sonnet-haiku": { orchestrator: "opus", lead: "sonnet", worker: "haiku", label: "Opus orchestrator + Haiku workers" },
   // Open model on the free Kaggle GPU server (daemon/src/kaggle.ts). PC only.
   kaggle: { orchestrator: "kaggle", lead: "kaggle", worker: "kaggle", label: "Kaggle GPU (open model, free, PC only)" },
+  // Each tier from the job's orchestratorModel/leadModel/workerModel; these are the fallbacks.
+  custom: { orchestrator: "sonnet", lead: "sonnet", worker: "haiku", label: "Custom: pick each tier (mix Claude and Kaggle)" },
 };
+
+/** A tier's model in a custom job: a Claude model or "kaggle:<ollama model>". Empty = the custom preset's fallback. */
+export const TierModel = z.string().max(110).regex(/^(|opus|sonnet|haiku|kaggle:[\w.:/-]+)$/, "not a model");
 
 const tierName = (m: string) => m[0]!.toUpperCase() + m.slice(1);
 
 /** A preset's label for a team shape: 3-tier teams name the lead tier too. */
 export function presetLabel(preset: ModelPreset, shape: TeamShape): string {
   const p = MODEL_PRESETS[preset];
-  if (shape !== "three-tier" || preset === "kaggle") return p.label;
+  if (shape !== "three-tier" || preset === "kaggle" || preset === "custom") return p.label;
   return `${tierName(p.orchestrator)} orchestrator → ${tierName(p.lead)} leads → ${tierName(p.worker)} workers`;
 }
 
@@ -137,6 +142,10 @@ export const JobRecord = z.object({
   kaggleModel: KaggleModel.default(""),
   /** Workers' Kaggle model when it differs (a second server). Empty = same as kaggleModel. */
   kaggleWorkerModel: KaggleModel.default(""),
+  /** Custom preset: each tier's model (see TierModel). */
+  orchestratorModel: TierModel.default(""),
+  leadModel: TierModel.default(""),
+  workerModel: TierModel.default(""),
   workers: z.string().default("auto"), // "auto" | "1"..String(MAX_WORKERS)
   budgetUsd: num,
   reviewCap: num.default(3),
@@ -227,6 +236,10 @@ export const NewJobInput = z.object({
   kaggleModel: KaggleModel.default(""),
   /** Workers' Kaggle model when it differs (a second server). Empty = same as kaggleModel. */
   kaggleWorkerModel: KaggleModel.default(""),
+  /** Custom preset: each tier's model (see TierModel). */
+  orchestratorModel: TierModel.default(""),
+  leadModel: TierModel.default(""),
+  workerModel: TierModel.default(""),
   workers: z.enum(WORKER_CHOICES).default("auto"),
   budgetUsd: z.number().positive().max(500).optional(),
   reviewCap: z.number().int().min(1).max(10).default(3),

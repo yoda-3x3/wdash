@@ -50,6 +50,10 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
   const [kaggleModel, setKaggleModel] = useState(KAGGLE_MODELS[0]!.id);
   /** "" = same as kaggleModel; a different model runs on a second Kaggle server. */
   const [kaggleWorkerModel, setKaggleWorkerModel] = useState("");
+  /** Custom preset: each tier is a Claude model or "kaggle:<model>". */
+  const [tiers, setTiers] = useState({ orchestratorModel: "sonnet", leadModel: "sonnet", workerModel: `kaggle:${KAGGLE_MODELS[0]!.id}` });
+  const custom = !chat && models === "custom";
+  const customKaggle = custom && Object.values(tiers).some((m) => m.startsWith("kaggle:"));
   const kaggle = chat ? chatModel === "kaggle" : models === "kaggle";
   const [autoMode, setAutoMode] = useState(false);
   const [lite, setLite] = useState(false);
@@ -117,8 +121,9 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
         models,
         kaggleModel: kaggle ? kaggleModel : "",
         kaggleWorkerModel: kaggle && !chat && kaggleWorkerModel !== kaggleModel ? kaggleWorkerModel : "",
+        ...(custom ? tiers : {}),
         // The Kaggle server is driven from the PC.
-        runOn: kaggle ? "home" : runOn,
+        runOn: kaggle || customKaggle ? "home" : runOn,
         reviewCap,
         autoMode,
         lite,
@@ -273,6 +278,18 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
                   ))}
                 </select>
               </Field>
+              {custom && (
+                <>
+                  <TierField label="Orchestrator" value={tiers.orchestratorModel} onChange={(v) => setTiers({ ...tiers, orchestratorModel: v })} />
+                  <TierField label={shape === "three-tier" ? "Leads" : "Leads (if the orchestrator makes any)"} value={tiers.leadModel} onChange={(v) => setTiers({ ...tiers, leadModel: v })} />
+                  <TierField label="Workers" value={tiers.workerModel} onChange={(v) => setTiers({ ...tiers, workerModel: v })} />
+                  {customKaggle && (
+                    <p className="text-xs text-muted sm:col-span-2">
+                      Kaggle tiers run free on your Kaggle GPU servers (one per model, up to 2), so this job runs on your PC. Claude tiers count toward the budget as usual.
+                    </p>
+                  )}
+                </>
+              )}
               {kaggle && (
                 <>
                   <KaggleModelField label={shape === "three-tier" ? "Kaggle model: orchestrator + leads" : "Kaggle model: orchestrator"} value={kaggleModel} onChange={setKaggleModel} />
@@ -285,7 +302,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
             </>
           )}
           <Field label="Run on">
-            <select className="input" value={kaggle ? "home" : runOn} disabled={kaggle} onChange={(e) => setRunOn(e.target.value)}>
+            <select className="input" value={kaggle || customKaggle ? "home" : runOn} disabled={kaggle || customKaggle} onChange={(e) => setRunOn(e.target.value)}>
               <option value="auto">Auto (PC if online)</option>
               <option value="home">PC only (wait if offline)</option>
               <option value="cloud" disabled={selected && !selected.cloud}>
@@ -312,6 +329,28 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
       </div>
       {err && <p className="text-sm text-bad">{err}</p>}
     </form>
+  );
+}
+
+/** One tier of a custom team: Claude or a Kaggle model. */
+function TierField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <Field label={label}>
+      <select className="input" value={value} onChange={(e) => onChange(e.target.value)}>
+        <optgroup label="Claude">
+          <option value="opus">Opus</option>
+          <option value="sonnet">Sonnet</option>
+          <option value="haiku">Haiku</option>
+        </optgroup>
+        <optgroup label="Kaggle GPU (free)">
+          {KAGGLE_MODELS.map((m) => (
+            <option key={m.id} value={`kaggle:${m.id}`}>
+              {m.label}
+            </option>
+          ))}
+        </optgroup>
+      </select>
+    </Field>
   );
 }
 

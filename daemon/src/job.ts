@@ -169,16 +169,15 @@ export class JobRunner implements AgentHost, TeamApi {
       await clear(this.relay, this.jobId, "cloud_dispatch_failed");
 
       await this.prepareMain();
-      // Kaggle models this job uses get their servers up first; two different models boot two servers in parallel.
-      const kaggleModels = new Set(
-        (this.job.kind === "chat" ? [this.modelFor(this.job.chatModel)] : [this.modelFor("kaggle"), this.modelFor("kaggle", true)])
-          .filter(isKaggleModel)
-          .map(kaggleModelName),
-      );
-      if (this.job.kind === "chat" ? isKaggleModel(this.job.chatModel) : this.job.models === "kaggle") {
-        await Promise.all([...kaggleModels].map((m) => ensureKaggleFor(this.relay, m, (text) => this.info(text))));
-      }
       const existing = await this.relay.getAgents(this.jobId);
+      // Kaggle servers for the agents about to run come up first (in parallel). Workers' and leads' servers start
+      // warming now too, so they're likely ready by the time the plan is approved.
+      const first = existing.length ? existing.filter((r) => r.status !== "done").map((r) => r.model) : [this.roleModel(this.job.kind === "chat" ? "chat" : "orchestrator")];
+      await Promise.all([...new Set(first)].map((m) => this.ensureModel(m)));
+      if (this.job.kind === "team") {
+        const later = [this.roleModel("worker"), ...(this.job.shape === "three-tier" ? [this.roleModel("lead")] : [])];
+        for (const m of new Set(later)) void this.ensureModel(m).catch((e) => this.info(`Kaggle server for ${m} didn't start: ${(e as Error).message}`));
+      }
       if (existing.length) await this.resumeAgents(existing);
       else if (this.job.kind === "chat") await this.startChat();
       else await this.startOrchestrator();
@@ -216,12 +215,11 @@ export class JobRunner implements AgentHost, TeamApi {
   }
 
   private async startOrchestrator(): Promise<void> {
-    const preset = MODEL_PRESETS[this.job.models];
     await this.relay.setStatus(this.jobId, "planning");
     const rec: AgentRecord = {
       id: this.lead,
       role: "orchestrator",
-      model: this.modelFor(preset.orchestrator),
+      model: this.roleModel("orchestrator"),
       name: "orchestrator",
       task: this.job.task,
       globs: [],
@@ -243,7 +241,7 @@ export class JobRunner implements AgentHost, TeamApi {
     const rec: AgentRecord = {
       id: CHAT_AGENT,
       role: "chat",
-      model: this.modelFor(this.job.chatModel),
+      model: this.roleModel("chat"),
       name: CHAT_AGENT,
       task: this.job.task,
       globs: ["**"],
@@ -337,11 +335,22 @@ export class JobRunner implements AgentHost, TeamApi {
     await this.relay.setStatus(this.jobId, status);
   }
 
-  /** "kaggle" becomes "kaggle:<model>" when the job picked a Kaggle model; workers can have their own. */
-  private modelFor(model: string, worker = false): string {
-    if (model !== "kaggle") return model;
-    const picked = (worker && this.job.kaggleWorkerModel) || this.job.kaggleModel;
-    return picked ? `kaggle:${picked}` : model;
+  /** The model an agent in `role` runs: a Claude model, "kaggle" (the server's default), or "kaggle:<model>". */
+  private roleModel(role: AgentRecord["role"]): string {
+    const j = this.job;
+    if (role === "chat") return j.chatModel === "kaggle" && j.kaggleModel ? `kaggle:${j.kaggleModel}` : j.chatModel;
+    const tier = role === "orchestrator" ? "orchestrator" : role === "lead" ? "lead" : "worker";
+    const custom = j.models === "custom" ? { orchestrator: j.orchestratorModel, lead: j.leadModel, worker: j.workerModel }[tier] : "";
+    if (custom) return custom;
+    const m = MODEL_PRESETS[j.models][tier];
+    if (m !== "kaggle") return m;
+    const picked = (tier === "worker" && j.kaggleWorkerModel) || j.kaggleModel;
+    return picked ? `kaggle:${picked}` : m;
+  }
+
+  /** Start (or reuse) the Kaggle server for a Kaggle model; Claude models need nothing. */
+  private async ensureModel(model: string): Promise<void> {
+    if (isKaggleModel(model)) await ensureKaggleFor(this.relay, kaggleModelName(model), (text) => this.info(text));
   }
 
   private makeRunner(rec: AgentRecord, cwd: string, systemAppend: string): AgentRunner {
@@ -502,7 +511,7 @@ export class JobRunner implements AgentHost, TeamApi {
         await this.relay.setStatus(this.jobId, "running");
         for (const a of this.agents.values()) {
           if (["failed", "stopped", "idle", "running"].includes(a.rec.status) && !(isTeamMember(a.rec.role) && this.workers.get(a.id)?.approved)) {
-            if (a.rec.status === "failed") await a.restart("[wdash] Resuming after an error. Check where you were and continue.");
+            if (a.rec.status === "failed") await this.ensureModel(a.rec.model).then(() => a.restart("[wdash] Resuming after an error. Check where you were and continue."));
             else a.send("[wdash] The user resumed the job. Continue where you left off.");
           }
         }
@@ -522,7 +531,7 @@ export class JobRunner implements AgentHost, TeamApi {
         if (!a) return;
         await clear(this.relay, this.jobId, "agent_error", a.id);
         await clear(this.relay, this.jobId, "stalled", a.id);
-        await a.restart("[wdash] You were restarted by the user. Check your state (git status) and continue your task.");
+        await this.ensureModel(a.rec.model);
         return;
       }
       case "nudge": {
@@ -733,6 +742,7 @@ export class JobRunner implements AgentHost, TeamApi {
     this.workers.set(name, { rounds: rec.reviewRounds, failedChecks: 0, approved: false, idleNudges: 0, startedAt: Date.now(), helps: prev?.helps, helpAsked: true, parent });
     await this.relay.setClaims(this.jobId, name, rec.globs);
     rec.status = "starting";
+    await this.ensureModel(rec.model);
     const runner = this.makeRunner(rec, cwd, this.promptFor(rec));
     await runner.save();
     runner.start(
@@ -817,17 +827,18 @@ export class JobRunner implements AgentHost, TeamApi {
     const others = lender ? Object.fromEntries(Object.entries(claims).filter(([, owner]) => owner !== lender)) : claims;
     const conflicts = conflictingClaims(others, w.globs, w.name);
     if (conflicts.length) throw new Error(`Ownership conflicts: ${conflicts.join("; ")}`);
-    const preset = MODEL_PRESETS[this.job.models];
     const branch = branchFor.worker(this.jobId, w.name);
     const base = byLead ? this.agents.get(by)!.rec.branch ?? branchFor.worker(this.jobId, by) : branchFor.main(this.jobId);
     if (byLead) await G.checkpointCommit(this.agents.get(by)!.cwd, `wdash: ${by} before spawning ${w.name}`).catch(() => undefined);
     const cwd = await G.addWorktree(this.repoDir, this.wtPath(w.name), branch, base);
     await this.syncAttachments(cwd);
     const role = w.lead ? "lead" : "worker";
+    const model = this.roleModel(role);
+    await this.ensureModel(model);
     const rec: AgentRecord = {
       id: w.name,
       role,
-      model: role === "lead" ? this.modelFor(preset.lead) : this.modelFor(preset.worker, true),
+      model,
       name: w.name,
       task: w.task,
       globs: w.globs,
