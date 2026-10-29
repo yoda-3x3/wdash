@@ -116,6 +116,8 @@ async function waitReady(slot: number, topic: string, since: number, key: string
     }
     const st = await kernelStatus(slot).catch(() => undefined);
     if (st?.status && /error|cancel/i.test(st.status)) throw new Error(`${name} notebook ${st.status}: ${st.failureMessage ?? ""}`);
+    // Kaggle can hold a session in its queue for hours (no free GPUs); say so instead of looking stuck.
+    if (st?.status && /queued/i.test(st.status) && last !== "queued") await log(`${name}: ${(last = "queued")} on Kaggle (waiting for a free GPU)`);
     await new Promise((r) => setTimeout(r, 10_000));
   }
   throw new Error(`${name} didn't come up within 25 minutes`);

@@ -157,6 +157,9 @@ def tunnel():
 
 def main():
     announce("booting", models=MODELS)
+    # Without a GPU (weekly quota used up, or no T4s free) a 27B model runs at under 1 token/s: fail fast instead.
+    if subprocess.run("nvidia-smi -L", shell=True).returncode != 0:
+        raise RuntimeError("Kaggle gave this session no GPU (weekly GPU quota used up, or no T4s free)")
     subprocess.run("apt-get -qq update && apt-get -qq install -y zstd", shell=True)
     sh("curl -fsSL https://ollama.com/install.sh | sh")
     env = dict(os.environ, OLLAMA_HOST=f"{OLLAMA[0]}:{OLLAMA[1]}", OLLAMA_CONTEXT_LENGTH=str(CONFIG["contextLength"]), OLLAMA_KEEP_ALIVE="-1")
