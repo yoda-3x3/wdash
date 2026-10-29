@@ -31,11 +31,11 @@ async function save(relay: Relay, req: ProjectRequest): Promise<void> {
   await relay.r.set(K.projectRequest(req.id), JSON.stringify(req), "EX", REQUEST_TTL_SECONDS);
 }
 
-/** Handles queued "new project" requests from the dashboard. Returns how many it processed. */
-export async function processProjectRequests(relay: Relay): Promise<number> {
+/** Handles queued "new project" requests from the dashboard, starting with `first` if it was already popped. Returns how many it processed. */
+export async function processProjectRequests(relay: Relay, first?: string): Promise<number> {
   let n = 0;
-  for (;;) {
-    const id = await relay.r.lpop(K.projectQueue);
+  for (let next = first; ; next = undefined) {
+    const id = next ?? (await relay.r.lpop(K.projectQueue));
     if (!id) return n;
     n++;
     const raw = await relay.r.get(K.projectRequest(id));

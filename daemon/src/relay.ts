@@ -3,6 +3,7 @@ import {
   K,
   TTL_SECONDS,
   HEARTBEAT_TTL_SECONDS,
+  HOME_HEARTBEAT_TTL_SECONDS,
   LEASE_TTL_SECONDS,
   jobKeys,
   JobRecord,
@@ -147,7 +148,7 @@ export class Relay {
   // ----- heartbeats / leases -----
 
   async heartbeatHome(): Promise<void> {
-    await this.r.set(K.homeHeartbeat, String(Date.now()), "EX", HEARTBEAT_TTL_SECONDS);
+    await this.r.set(K.homeHeartbeat, String(Date.now()), "EX", HOME_HEARTBEAT_TTL_SECONDS);
   }
 
   async heartbeatCloud(jobId: string): Promise<void> {
@@ -229,10 +230,14 @@ export class Relay {
     return (await this.r.get(K.paused)) === "1";
   }
 
-  /** Blocking pop of the next job for the home daemon. */
-  async popHomeJob(timeoutSec = 5): Promise<string | undefined> {
-    const res = await this.blocking.brpop(K.homeQueue, timeoutSec);
-    return res?.[1];
+  /**
+   * One blocking pop across everything the home daemon waits on (jobs, "new project" requests, pings), so an idle
+   * daemon costs one request a minute instead of polling each queue. `jobs: false` leaves jobs queued.
+   */
+  async popHomeWork(timeoutSec: number, jobs = true): Promise<{ queue: string; id: string } | undefined> {
+    const queues = jobs ? [K.homeQueue, K.projectQueue, K.pingQueue] : [K.projectQueue, K.pingQueue];
+    const res = await this.blocking.brpop(...queues, timeoutSec);
+    return res ? { queue: res[0], id: res[1] } : undefined;
   }
 }
 

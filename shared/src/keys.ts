@@ -4,6 +4,8 @@ export const TTL_SECONDS = 90 * 24 * 60 * 60;
 /** Big attachments take a lot of Redis space (a 90 MB file is ~120 MB as base64), so their pieces are kept 3 days. */
 export const FILE_CHUNK_TTL_SECONDS = 3 * 24 * 60 * 60;
 export const HEARTBEAT_TTL_SECONDS = 30;
+/** The home daemon beats once a minute (every request counts against Upstash's monthly limit); "PC offline" after 2.5 min. */
+export const HOME_HEARTBEAT_TTL_SECONDS = 150;
 export const LEASE_TTL_SECONDS = 30;
 
 export const K = {

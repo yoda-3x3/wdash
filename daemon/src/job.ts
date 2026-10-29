@@ -412,7 +412,8 @@ export class JobRunner implements AgentHost, TeamApi {
     while (!this.stopped) {
       let cmds: Awaited<ReturnType<Relay["readCommands"]>> = [];
       try {
-        cmds = await this.relay.readCommands(this.jobId, last, 5000, this.cmdConn);
+        // A long block costs one request per 30 s and still returns the moment a command arrives.
+        cmds = await this.relay.readCommands(this.jobId, last, 30_000, this.cmdConn);
       } catch (e) {
         if (this.stopped) return;
         console.error("readCommands", e);

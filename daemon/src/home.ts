@@ -29,7 +29,7 @@ export async function runHome(): Promise<void> {
     }
   };
   await heartbeat();
-  const hb = setInterval(heartbeat, 10_000);
+  const hb = setInterval(heartbeat, 60_000);
 
   const startJob = async (jobId: string) => {
     if (running.has(jobId)) return;
@@ -75,24 +75,22 @@ export async function runHome(): Promise<void> {
   await sync();
   const syncTimer = setInterval(sync, 5 * 60_000);
 
-  // "New project" requests from the dashboard (one at a time; gh does the GitHub side).
-  let creating = false;
-  const projectTimer = setInterval(async () => {
-    if (creating) return;
-    creating = true;
-    try {
-      if (await processProjectRequests(relay)) projects = loadLocalProjects();
-      // "Ping PC" from the dashboard: answer with what this daemon is doing.
-      for (let id = await relay.r.lpop(K.pingQueue); id; id = await relay.r.lpop(K.pingQueue)) {
-        const pong = { at: Date.now(), uptimeSec: Math.round(process.uptime()), jobs: running.size, projects: projects.length, host: hostname() };
-        await relay.r.set(K.pong(id), JSON.stringify(pong), "EX", 60);
+  // "New project" requests from the dashboard, one at a time (gh does the GitHub side), off the main loop.
+  let creating: Promise<unknown> = Promise.resolve();
+  const createProjects = (first: string) => {
+    creating = creating.then(async () => {
+      try {
+        if (await processProjectRequests(relay, first)) projects = loadLocalProjects();
+      } catch (e) {
+        console.error("project requests failed", (e as Error).message);
       }
-    } catch (e) {
-      console.error("project requests failed", (e as Error).message);
-    } finally {
-      creating = false;
-    }
-  }, 3000);
+    });
+  };
+  // "Ping PC" from the dashboard: answer with what this daemon is doing.
+  const pong = async (id: string) => {
+    const p = { at: Date.now(), uptimeSec: Math.round(process.uptime()), jobs: running.size, projects: projects.length, host: hostname() };
+    await relay.r.set(K.pong(id), JSON.stringify(p), "EX", 60);
+  };
 
   const shutdown = async () => {
     if (stopping) return;
@@ -100,27 +98,30 @@ export async function runHome(): Promise<void> {
     console.log("shutting down…");
     clearInterval(hb);
     clearInterval(syncTimer);
-    clearInterval(projectTimer);
     await relay.r.del(K.homeHeartbeat).catch(() => undefined);
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
+  // One blocking wait for jobs, project requests and pings: about one request a minute while idle.
   while (!stopping) {
-    if (running.size >= MAX_CONCURRENT_JOBS || (await relay.isPaused().catch(() => false))) {
-      await new Promise((r) => setTimeout(r, 2000));
-      continue;
-    }
-    let jobId: string | undefined;
+    // Paused or at the job cap: leave jobs queued, but keep answering pings and project requests.
+    const full = running.size >= MAX_CONCURRENT_JOBS || (await relay.isPaused().catch(() => false));
+    let next: { queue: string; id: string } | undefined;
     try {
-      jobId = await relay.popHomeJob(5);
+      next = await relay.popHomeWork(full ? 30 : 60, !full);
     } catch (e) {
       console.error("queue read failed", (e as Error).message);
       await new Promise((r) => setTimeout(r, 5000));
       continue;
     }
-    if (jobId) await startJob(jobId);
+    if (!next) continue;
+    if (next.queue === K.projectQueue) createProjects(next.id);
+    else if (next.queue === K.pingQueue) await pong(next.id).catch((e) => console.error("ping failed", (e as Error).message));
+    // Paused while we were waiting: put the job back where it was (next in line).
+    else if (await relay.isPaused().catch(() => false)) await relay.r.rpush(K.homeQueue, next.id);
+    else await startJob(next.id);
   }
 }
 
