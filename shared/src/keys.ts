@@ -34,6 +34,7 @@ export const K = {
   pong: (id: string) => `wd:pong:${id}`, // STRING EX 60: the daemon's reply JSON
   kaggleServers: "wd:kaggle:servers", // HASH slot -> running Kaggle model server JSON (daemon/src/kaggle.ts)
   kaggleSessions: "wd:kaggle:sessions", // ZSET KaggleSession JSON -> end ts (finished servers, 14 days)
+  quotaSent: (id: string) => `wd:quota:sent:${id}`, // STRING EX 8d: a quota warning level already sent for that period
   kaggleQueue: "wd:queue:kaggle", // LIST of KaggleControl JSON from the website's Start/Stop buttons
   kaggleLog: "wd:kaggle:log", // LIST of recent server start/stop messages for the website (newest first, 30)
   projectRequest: (id: string) => `wd:projreq:${id}`, // STRING EX 1 day: ProjectRequest JSON

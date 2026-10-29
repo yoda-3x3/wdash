@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { Attention, AttentionAction, JobRecord } from "@wdash/shared";
-import { NON_BLOCKING } from "@wdash/shared";
+import { NON_BLOCKING, QUOTA_JOB } from "@wdash/shared";
 import { api, timeAgo } from "@/lib/client";
 
 const STATUS_STYLE: Record<string, string> = {
@@ -126,7 +126,7 @@ export function AttentionCard({ att, onDone, showJob }: { att: Attention; onDone
           <div className="flex flex-wrap items-baseline gap-x-2">
             <span className="font-medium">{att.title}</span>
             {showJob && (
-              <a href={`/jobs/${att.jobId}`} className="truncate text-xs text-muted hover:underline">
+              <a href={att.jobId === QUOTA_JOB ? "/settings" : `/jobs/${att.jobId}`} className="truncate text-xs text-muted hover:underline">
                 {showJob}
               </a>
             )}

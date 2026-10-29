@@ -106,6 +106,29 @@ export type KaggleSession = { user: string; slot: number; start: number; end: nu
 export const KAGGLE_GPU_HOURS_PER_WEEK = 30;
 export const KAGGLE_TPU_HOURS_PER_WEEK = 20;
 
+/**
+ * Kaggle hours per account and accelerator within the last `windowMs`: finished sessions (clipped to the window)
+ * plus running servers. Used by the usage panel and the quota notifier.
+ */
+export function kaggleHours(
+  sessions: KaggleSession[],
+  running: Array<{ user?: string; accel?: KaggleAccel; startedAt: number }>,
+  now: number,
+  windowMs = 7 * 24 * 60 * 60_000,
+): Array<{ user: string; accel: KaggleAccel; hours: number; quota: number }> {
+  const totals = new Map<string, number>();
+  const add = (user: string, accel: KaggleAccel, start: number, end: number) => {
+    const k = `${user}|${accel}`;
+    totals.set(k, (totals.get(k) ?? 0) + Math.max(0, end - Math.max(start, now - windowMs)) / 3_600_000);
+  };
+  for (const s of sessions) add(s.user, s.accel ?? "gpu", s.start, s.end);
+  for (const s of running) add(s.user ?? "?", s.accel ?? "gpu", s.startedAt, now);
+  return [...totals].map(([k, h]) => {
+    const [user, accel] = k.split("|") as [string, KaggleAccel];
+    return { user, accel, hours: Math.round(h * 10) / 10, quota: accel === "tpu" ? KAGGLE_TPU_HOURS_PER_WEEK : KAGGLE_GPU_HOURS_PER_WEEK };
+  });
+}
+
 /** GPU servers run Ollama (models like "qwen3.8:27b"); TPU servers run vLLM (Hugging Face ids like "Qwen/Qwen3-32B"). */
 export type KaggleAccel = "gpu" | "tpu";
 export const kaggleAccelFor = (model: string): KaggleAccel => (model.includes("/") && !model.includes(":") ? "tpu" : "gpu");

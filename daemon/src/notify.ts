@@ -1,5 +1,5 @@
 import webpush from "web-push";
-import { K, buildAttention, attentionId, type Attention, type AttentionReason } from "@wdash/shared";
+import { K, QUOTA_JOB, buildAttention, attentionId, type Attention, type AttentionReason } from "@wdash/shared";
 import { env } from "./config.js";
 import type { Relay } from "./relay.js";
 
@@ -20,7 +20,8 @@ export type RaiseCtx = { jobId: string; agentId?: string; agentName?: string; re
 export async function raise(relay: Relay, reason: AttentionReason, ctx: RaiseCtx): Promise<Attention> {
   const att: Attention = { ...buildAttention(reason, ctx), createdAt: Date.now() };
   await relay.r.hset(K.attention, att.id, JSON.stringify(att));
-  await relay.emit({ jobId: ctx.jobId, agentId: ctx.agentId, type: "attention", payload: att as unknown as Record<string, unknown> });
+  // Quota warnings belong to no job, so there's no job timeline to write to.
+  if (ctx.jobId !== QUOTA_JOB) await relay.emit({ jobId: ctx.jobId, agentId: ctx.agentId, type: "attention", payload: att as unknown as Record<string, unknown> });
   await push(relay, att);
   return att;
 }
@@ -28,7 +29,7 @@ export async function raise(relay: Relay, reason: AttentionReason, ctx: RaiseCtx
 export async function clear(relay: Relay, jobId: string, reason: AttentionReason, ref?: string): Promise<void> {
   const id = attentionId(jobId, reason, ref);
   const removed = await relay.r.hdel(K.attention, id);
-  if (removed) await relay.emit({ jobId, type: "attention_cleared", payload: { id } });
+  if (removed && jobId !== QUOTA_JOB) await relay.emit({ jobId, type: "attention_cleared", payload: { id } });
 }
 
 /** Clear every open attention for a job (e.g. on cancel). */
@@ -46,13 +47,15 @@ export async function clearJob(relay: Relay, jobId: string, except: AttentionRea
 async function push(relay: Relay, att: Attention): Promise<void> {
   if (!vapid()) return;
   // At most one push per (job, reason) per 2 minutes; the inbox always has the latest.
-  const dd = await relay.r.set(K.pushDedupe(att.jobId, att.reason), "1", "EX", 120, "NX");
+  // Quota warnings dedupe per quota, so two different quotas crossing together both reach the phone.
+  const quota = att.jobId === QUOTA_JOB;
+  const dd = await relay.r.set(K.pushDedupe(att.jobId, quota ? `${att.reason}:${att.ref}` : att.reason), "1", "EX", 120, "NX");
   if (!dd) return;
   const subs = await relay.r.hgetall(K.pushSubs);
   const payload = JSON.stringify({
     title: att.title,
     body: att.body.slice(0, 300),
-    url: `${env().WDASH_WEB_URL}/jobs/${att.jobId}`,
+    url: `${env().WDASH_WEB_URL}${quota ? "/settings" : `/jobs/${att.jobId}`}`,
     tag: `${att.jobId}:${att.reason}`,
   });
   await Promise.all(

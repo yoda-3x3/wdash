@@ -1,6 +1,7 @@
 export * from "./keys.js";
 export * from "./schema.js";
 export * from "./attention.js";
+export * from "./upstash.js";
 
 /** Short sortable id: base36 time + random. */
 export function newId(prefix = ""): string {

@@ -6,6 +6,7 @@ import { JobRunner } from "./job.js";
 import { handleKaggleControl, liveKaggleServers } from "./kaggle.js";
 import { clear, raise } from "./notify.js";
 import { processProjectRequests } from "./projects.js";
+import { checkQuotas } from "./quota.js";
 import { Relay } from "./relay.js";
 
 const MAX_CONCURRENT_JOBS = 3;
@@ -74,6 +75,7 @@ export async function runHome(): Promise<void> {
     }
     // Notices Kaggle servers that idled off, so their GPU time is counted on the usage panel.
     await liveKaggleServers(relay).catch((e) => console.error("kaggle check failed", (e as Error).message));
+    await checkQuotas(relay).catch((e) => console.error("quota check failed", (e as Error).message));
   };
   await sync();
   const syncTimer = setInterval(sync, 5 * 60_000);

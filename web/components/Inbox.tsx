@@ -1,6 +1,6 @@
 "use client";
 
-import { NON_BLOCKING } from "@wdash/shared";
+import { NON_BLOCKING, QUOTA_JOB } from "@wdash/shared";
 import { ApproveAll, AttentionCard } from "./bits";
 import { useBoard } from "./Shell";
 
@@ -9,7 +9,7 @@ export function Inbox() {
   if (!state) return <p className="text-muted">Loading…</p>;
   const blocking = state.attention.filter((a) => !NON_BLOCKING.includes(a.reason));
   const fyi = state.attention.filter((a) => NON_BLOCKING.includes(a.reason));
-  const title = (id: string) => state.jobs.find((j) => j.id === id)?.title ?? id;
+  const title = (id: string) => (id === QUOTA_JOB ? "Usage" : (state.jobs.find((j) => j.id === id)?.title ?? id));
   return (
     <div className="space-y-6">
       <section className="space-y-2">

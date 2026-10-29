@@ -19,6 +19,7 @@ export const AttentionReason = z.enum([
   "needs_merge",
   "job_finished",
   "job_failed",
+  "quota_warning",
 ]);
 export type AttentionReason = z.infer<typeof AttentionReason>;
 
@@ -50,7 +51,10 @@ export const Attention = z.object({
 export type Attention = z.infer<typeof Attention>;
 
 /** Reasons that are informational follow-ups, not blocking (shown in inbox but lower priority). */
-export const NON_BLOCKING: AttentionReason[] = ["budget_warning", "pc_offline", "job_finished"];
+export const NON_BLOCKING: AttentionReason[] = ["budget_warning", "pc_offline", "job_finished", "quota_warning"];
+
+/** jobId of attentions that aren't about a job (usage quotas); they link to Settings, where usage is shown. */
+export const QUOTA_JOB = "usage";
 
 /** Stable id so re-raising the same stop replaces rather than duplicates. */
 export function attentionId(jobId: string, reason: AttentionReason, ref?: string): string {
@@ -227,6 +231,13 @@ export function buildAttention(reason: AttentionReason, ctx: Ctx): Omit<Attentio
           { label: "Resume from checkpoint", cmd: { type: "resume" }, style: "primary" },
           { label: "Archive", webAction: "archive", style: "default" },
         ],
+      };
+    case "quota_warning":
+      return {
+        ...base,
+        title: "Usage quota warning",
+        body: d,
+        actions: [{ label: "See usage", href: "/settings", style: "primary" }],
       };
   }
 }
