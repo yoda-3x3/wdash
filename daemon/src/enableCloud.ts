@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DAEMON_ROOT, env, loadLocalProjects } from "./config.js";
 import { git, tryGit } from "./git.js";
+import { kaggleCloudSecrets } from "./kaggle.js";
 import type { Relay } from "./relay.js";
 
 const WDASH_ROOT = resolve(DAEMON_ROOT, "..");
@@ -102,6 +103,8 @@ export async function setupCloud(): Promise<string[]> {
     WDASH_PROJECTS_TOKEN: setup.GITHUB_DISPATCH_TOKEN,
     WDASH_VERCEL_TOKEN: process.env.VERCEL_TOKEN,
     WDASH_VERCEL_SCOPE: process.env.VERCEL_SCOPE,
+    // Kaggle model servers: cloud runs reuse running ones and can start new ones.
+    ...kaggleCloudSecrets(),
   };
   const log: string[] = [];
   for (const [k, v] of Object.entries(secrets)) {

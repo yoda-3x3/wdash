@@ -157,6 +157,58 @@ def tunnel():
 
 def main():
     announce("booting", models=MODELS)
+    if CONFIG.get("accel") == "tpu":
+        start_vllm()
+    else:
+        start_ollama()
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", PROXY_PORT), Proxy)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = tunnel()
+    global last_used
+    last_used = time.time()
+    announce("ready", url=url, models=MODELS)
+
+    while not stop.wait(30):
+        if time.time() - last_used > IDLE_SECONDS:
+            announce("stopped", reason="idle")
+            return
+        if time.time() - started > MAX_SECONDS:
+            announce("stopped", reason="time limit")
+            return
+    announce("stopped", reason="asked to stop")
+
+
+def start_vllm():
+    # TPU v5e-8: vLLM's TPU build serves one Hugging Face model across the 8 chips, on the port the proxy forwards to.
+    # It speaks the Anthropic Messages API (/v1/messages) like Ollama does. Experimental.
+    announce("installing vLLM for TPU")
+    sh("pip install -q vllm-tpu")
+    model = MODELS[0]
+    announce("pulling", model=model)
+    subprocess.Popen([
+        "vllm", "serve", model,
+        "--host", OLLAMA[0], "--port", str(OLLAMA[1]),
+        "--served-model-name", model,
+        "--tensor-parallel-size", str(CONFIG.get("tpuChips", 8)),
+        "--max-model-len", str(CONFIG["contextLength"]),
+        "--enable-auto-tool-choice", "--tool-call-parser", "hermes",
+    ])
+    # Downloading and compiling for the TPU takes a while.
+    deadline = time.time() + 60 * 60
+    while time.time() < deadline:
+        try:
+            c = http.client.HTTPConnection(*OLLAMA, timeout=5)
+            c.request("GET", "/v1/models")
+            if c.getresponse().status == 200:
+                return
+        except Exception:
+            pass
+        time.sleep(10)
+    raise RuntimeError("vLLM didn't come up on the TPU within 60 minutes")
+
+
+def start_ollama():
     # Without a GPU (weekly quota used up, or no T4s free) a 27B model runs at under 1 token/s: fail fast instead.
     if subprocess.run("nvidia-smi -L", shell=True).returncode != 0:
         raise RuntimeError("Kaggle gave this session no GPU (weekly GPU quota used up, or no T4s free)")
@@ -175,22 +227,6 @@ def main():
         ollama("POST", "/api/pull", {"model": m, "stream": False})
     # Load the first model now so the first agent turn doesn't wait for it.
     ollama("POST", "/api/generate", {"model": MODELS[0], "prompt": "hi", "stream": False, "options": {"num_predict": 1}})
-
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", PROXY_PORT), Proxy)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    url = tunnel()
-    global last_used
-    last_used = time.time()
-    announce("ready", url=url, models=MODELS)
-
-    while not stop.wait(30):
-        if time.time() - last_used > IDLE_SECONDS:
-            announce("stopped", reason="idle")
-            return
-        if time.time() - started > MAX_SECONDS:
-            announce("stopped", reason="time limit")
-            return
-    announce("stopped", reason="asked to stop")
 
 
 try:

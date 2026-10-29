@@ -32,6 +32,10 @@ export const K = {
   projectQueue: "wd:queue:projects", // LIST of ProjectRequest ids for the home daemon
   pingQueue: "wd:queue:ping", // LIST of ping ids for the home daemon
   pong: (id: string) => `wd:pong:${id}`, // STRING EX 60: the daemon's reply JSON
+  kaggleServers: "wd:kaggle:servers", // HASH slot -> running Kaggle model server JSON (daemon/src/kaggle.ts)
+  kaggleSessions: "wd:kaggle:sessions", // ZSET KaggleSession JSON -> end ts (finished servers, 14 days)
+  kaggleQueue: "wd:queue:kaggle", // LIST of KaggleControl JSON from the website's Start/Stop buttons
+  kaggleLog: "wd:kaggle:log", // LIST of recent server start/stop messages for the website (newest first, 30)
   projectRequest: (id: string) => `wd:projreq:${id}`, // STRING EX 1 day: ProjectRequest JSON
   homeHeartbeat: "wd:daemon:home:heartbeat",
   cloudHeartbeat: (id: string) => `wd:daemon:cloud:${id}:heartbeat`,

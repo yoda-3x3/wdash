@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { K, kaggleAccelFor, type KaggleAccel, type KaggleControl, type KaggleSession } from "@wdash/shared";
 import { DAEMON_ROOT } from "./config.js";
 import type { Relay } from "./relay.js";
 
@@ -13,30 +14,47 @@ import type { Relay } from "./relay.js";
  * Up to KAGGLE_MAX_SERVERS run at once, one per model when there's a free slot (so two models never swap on one GPU).
  * Slot n > 1 uses its own Kaggle account when ~/.kaggle/access_token_<n> and KAGGLE_USERNAME_<n> exist.
  */
-export type KaggleServer = { slot: number; url: string; key: string; models: string[]; startedAt: number };
+export type KaggleServer = {
+  slot: number;
+  url: string;
+  key: string;
+  models: string[];
+  /** When the notebook was pushed: Kaggle counts GPU time from boot. */
+  startedAt: number;
+  /** Kaggle account it runs on, for per-account GPU hours. */
+  user?: string;
+  /** Last time a health check got an answer; the session's end time once it's gone. */
+  lastSeen?: number;
+  accel?: KaggleAccel;
+};
 
 const API = "https://www.kaggle.com/api/v1";
 const SLUG = "wdash-model-server";
-const SERVERS_KEY = "wd:kaggle:servers"; // HASH slot -> KaggleServer JSON
+const SERVERS_KEY = K.kaggleServers;
+const SESSIONS_KEY = K.kaggleSessions;
+const SESSION_KEEP_MS = 14 * 24 * 60 * 60_000;
 const BOOT_TIMEOUT_MS = 25 * 60_000;
 
 const cfg = () => ({
   // The first is the default and is loaded at boot. qwen3-coder writes tool calls as text under Claude Code's prompt.
-  models: (process.env.KAGGLE_MODELS ?? "qwen3.8:27b").split(",").map((s) => s.trim()).filter(Boolean),
-  maxServers: Math.max(1, Number(process.env.KAGGLE_MAX_SERVERS ?? 2)),
-  idleMinutes: Number(process.env.KAGGLE_IDLE_MINUTES ?? 30),
-  maxHours: Number(process.env.KAGGLE_MAX_HOURS ?? 8),
-  contextLength: Number(process.env.KAGGLE_CONTEXT_LENGTH ?? 65536),
-  machineShape: process.env.KAGGLE_MACHINE ?? "NvidiaTeslaT4",
+  models: (process.env.KAGGLE_MODELS || "qwen3.8:27b").split(",").map((s) => s.trim()).filter(Boolean),
+  maxServers: Math.max(1, Number(process.env.KAGGLE_MAX_SERVERS || 2)),
+  idleMinutes: Number(process.env.KAGGLE_IDLE_MINUTES || 30),
+  maxHours: Number(process.env.KAGGLE_MAX_HOURS || 8),
+  contextLength: Number(process.env.KAGGLE_CONTEXT_LENGTH || 65536),
+  machineShape: process.env.KAGGLE_MACHINE || "NvidiaTeslaT4",
 });
 
 export const defaultKaggleModel = () => cfg().models[0]!;
 
-/** Slot 1 is the main account; slot n uses access_token_<n> / KAGGLE_USERNAME_<n> if set, else the main account. */
+/**
+ * Slot 1 is the main account; slot n uses its own token / KAGGLE_USERNAME_<n> if set, else the main account.
+ * Tokens come from KAGGLE_API_TOKEN[_<n>] (cloud runs get them as secrets) or ~/.kaggle/access_token[_<n>].
+ */
 function account(slot: number): { auth: string; user: string } {
   const dir = join(homedir(), ".kaggle");
   const read = (f: string) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8").trim() : "");
-  const own = slot > 1 ? read(`access_token_${slot}`) : "";
+  const own = slot > 1 ? (process.env[`KAGGLE_API_TOKEN_${slot}`] || read(`access_token_${slot}`)) : "";
   if (own) {
     const user = process.env[`KAGGLE_USERNAME_${slot}`];
     if (!user) throw new Error(`Set KAGGLE_USERNAME_${slot} in daemon/.env (the Kaggle username for access_token_${slot})`);
@@ -44,8 +62,8 @@ function account(slot: number): { auth: string; user: string } {
   }
   const json = join(dir, "kaggle.json");
   const legacy = existsSync(json) ? (JSON.parse(readFileSync(json, "utf8")) as { username: string; key: string }) : undefined;
-  const tok = process.env.KAGGLE_API_TOKEN ?? read("access_token");
-  const user = process.env.KAGGLE_USERNAME ?? legacy?.username;
+  const tok = process.env.KAGGLE_API_TOKEN || read("access_token");
+  const user = process.env.KAGGLE_USERNAME || legacy?.username;
   if (!user) throw new Error("Set KAGGLE_USERNAME in daemon/.env (your Kaggle username)");
   if (tok) return { auth: `Bearer ${tok}`, user };
   if (legacy) return { auth: `Basic ${Buffer.from(`${legacy.username}:${legacy.key}`).toString("base64")}`, user };
@@ -53,6 +71,26 @@ function account(slot: number): { auth: string; user: string } {
 }
 
 const slugFor = (slot: number) => (slot === 1 ? SLUG : `${SLUG}-${slot}`);
+
+/** Kaggle settings and tokens for `wdash-daemon setup-cloud`, so cloud runs can start and use the servers too. */
+export function kaggleCloudSecrets(): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = { KAGGLE_MODELS: process.env.KAGGLE_MODELS, KAGGLE_MAX_SERVERS: process.env.KAGGLE_MAX_SERVERS };
+  for (let slot = 1; slot <= cfg().maxServers; slot++) {
+    let a: { auth: string; user: string } | undefined;
+    try {
+      a = account(slot);
+    } catch {
+      continue;
+    }
+    if (!a.auth.startsWith("Bearer ")) continue;
+    // Slot n without its own account uses slot 1's, which is already set.
+    if (slot > 1 && a.user === account(1).user) continue;
+    const sfx = slot === 1 ? "" : `_${slot}`;
+    out[`KAGGLE_USERNAME${sfx}`] = a.user;
+    out[`KAGGLE_API_TOKEN${sfx}`] = a.auth.slice("Bearer ".length);
+  }
+  return out;
+}
 
 async function api<T>(slot: number, path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, { ...init, headers: { Authorization: account(slot).auth, "Content-Type": "application/json", ...init?.headers } });
@@ -66,11 +104,11 @@ export async function kernelStatus(slot = 1): Promise<{ status?: string; failure
 }
 
 /** Push (= start) a new version of a slot's server notebook. Returns the ntfy topic it will announce on. */
-async function launch(slot: number, models: string[]): Promise<{ topic: string; key: string; since: number }> {
+async function launch(slot: number, models: string[], accel: KaggleAccel): Promise<{ topic: string; key: string; since: number }> {
   const c = cfg();
   const key = randomBytes(24).toString("hex");
   const topic = `wdash-${randomBytes(16).toString("hex")}`;
-  const config = JSON.stringify({ key, topic, models, idleMinutes: c.idleMinutes, maxHours: c.maxHours, contextLength: c.contextLength });
+  const config = JSON.stringify({ key, topic, models, accel, idleMinutes: c.idleMinutes, maxHours: c.maxHours, contextLength: c.contextLength });
   const text = readFileSync(join(DAEMON_ROOT, "kaggle", "server.py"), "utf8").replace("__WDASH_CONFIG__", config);
   const since = Math.floor(Date.now() / 1000);
   const out = await api<{ error?: string }>(slot, "/kernels/push", {
@@ -82,10 +120,10 @@ async function launch(slot: number, models: string[]): Promise<{ topic: string; 
       language: "python",
       kernelType: "script",
       isPrivate: true,
-      enableGpu: true,
-      enableTpu: false,
+      enableGpu: accel === "gpu",
+      enableTpu: accel === "tpu",
       enableInternet: true,
-      machineShape: c.machineShape,
+      ...(accel === "gpu" ? { machineShape: c.machineShape } : {}),
     }),
   });
   if (out.error) throw new Error(`Kaggle push: ${out.error}`);
@@ -95,8 +133,8 @@ async function launch(slot: number, models: string[]): Promise<{ topic: string; 
 type Announcement = { state: string; url?: string; models?: string[]; model?: string; error?: string; reason?: string };
 
 /** Poll the ntfy topic until the notebook says it's ready (or failed). */
-async function waitReady(slot: number, topic: string, since: number, key: string, log: Log): Promise<KaggleServer> {
-  const deadline = Date.now() + BOOT_TIMEOUT_MS;
+async function waitReady(slot: number, topic: string, since: number, key: string, log: Log, timeoutMs = BOOT_TIMEOUT_MS): Promise<KaggleServer> {
+  const deadline = Date.now() + timeoutMs;
   const name = `Kaggle server ${slot}`;
   let last = "";
   // A timestamp at first, then the id of the last message seen, so each poll only returns new ones.
@@ -111,7 +149,7 @@ async function waitReady(slot: number, topic: string, since: number, key: string
       const a = JSON.parse(m.message) as Announcement;
       const label = a.state === "pulling" ? `pulling ${a.model}` : a.state;
       if (label !== last) await log(`${name}: ${(last = label)}`);
-      if (a.state === "ready" && a.url) return { slot, url: a.url, key, models: a.models ?? [], startedAt: Date.now() };
+      if (a.state === "ready" && a.url) return { slot, url: a.url, key, models: a.models ?? [], startedAt: since * 1000, user: account(slot).user, lastSeen: Date.now() };
       if (a.state === "failed" || a.state === "stopped") throw new Error(`${name} ${a.state}: ${a.error ?? a.reason ?? ""}`);
     }
     const st = await kernelStatus(slot).catch(() => undefined);
@@ -120,7 +158,7 @@ async function waitReady(slot: number, topic: string, since: number, key: string
     if (st?.status && /queued/i.test(st.status) && last !== "queued") await log(`${name}: ${(last = "queued")} on Kaggle (waiting for a free GPU)`);
     await new Promise((r) => setTimeout(r, 10_000));
   }
-  throw new Error(`${name} didn't come up within 25 minutes`);
+  throw new Error(`${name} didn't come up within ${Math.round(timeoutMs / 60_000)} minutes`);
 }
 
 export async function healthy(s: KaggleServer): Promise<boolean> {
@@ -139,11 +177,28 @@ export async function liveKaggleServers(relay: Relay): Promise<KaggleServer[]> {
     await relay.r.del("wd:kaggle:server");
   }
   const all = Object.values(await relay.r.hgetall(SERVERS_KEY)).map((v) => JSON.parse(v) as KaggleServer);
-  const alive = await Promise.all(all.map(async (s) => ((await healthy(s)) ? s : (await relay.r.hdel(SERVERS_KEY, String(s.slot)), undefined))));
-  return alive.filter((s): s is KaggleServer => !!s).sort((a, b) => a.slot - b.slot);
+  const alive = await Promise.all(
+    all.map(async (s) => {
+      if (await healthy(s)) return { ...s, lastSeen: Date.now() } as KaggleServer;
+      // Gone (idled off, time limit, or stopped on Kaggle): its GPU time ended around the last answer.
+      await relay.r.hdel(SERVERS_KEY, String(s.slot));
+      await recordSession(relay, s, s.lastSeen ?? s.startedAt);
+      return undefined;
+    }),
+  );
+  const live = alive.filter((s): s is KaggleServer => !!s).sort((a, b) => a.slot - b.slot);
+  if (live.length) await relay.r.hset(SERVERS_KEY, Object.fromEntries(live.map((s) => [String(s.slot), JSON.stringify(s)])));
+  return live;
 }
 
 const save = (relay: Relay, s: KaggleServer) => relay.r.hset(SERVERS_KEY, String(s.slot), JSON.stringify(s));
+
+/** A finished server session, for GPU hours per account (the website's usage panel). Kept 14 days. */
+async function recordSession(relay: Relay, s: KaggleServer, end: number): Promise<void> {
+  const session: KaggleSession = { user: s.user ?? "?", slot: s.slot, start: s.startedAt, end: Math.max(end, s.startedAt), accel: s.accel ?? "gpu" };
+  await relay.r.zadd(SESSIONS_KEY, session.end, JSON.stringify(session));
+  await relay.r.zremrangebyscore(SESSIONS_KEY, 0, Date.now() - SESSION_KEEP_MS);
+}
 
 /** Model -> server, for kaggleAgent(). Filled by ensureKaggleFor(). */
 const routes = new Map<string, KaggleServer>();
@@ -151,10 +206,11 @@ const routes = new Map<string, KaggleServer>();
 const launching = new Map<number, { models: string[]; p: Promise<KaggleServer> }>();
 
 function boot(relay: Relay, slot: number, models: string[], log: Log): Promise<KaggleServer> {
+  const accel = kaggleAccelFor(models[0]!);
   const p = (async () => {
-    await log(`Starting Kaggle server ${slot} for ${models.join(", ")} (first boot takes ~5-15 min)...`);
-    const { topic, key, since } = await launch(slot, models);
-    const s = await waitReady(slot, topic, since, key, log);
+    await log(`Starting Kaggle ${accel.toUpperCase()} server ${slot} for ${models.join(", ")} (first boot takes ~5-15 min${accel === "tpu" ? ", longer on TPU" : ""})...`);
+    const { topic, key, since } = await launch(slot, models, accel);
+    const s = { ...(await waitReady(slot, topic, since, key, log, accel === "tpu" ? 70 * 60_000 : BOOT_TIMEOUT_MS)), accel };
     await save(relay, s);
     return s;
   })().finally(() => launching.delete(slot));
@@ -179,7 +235,11 @@ export async function ensureKaggleFor(relay: Relay, model = defaultKaggleModel()
     if (free) s = await boot(relay, free, bootModels, log);
   }
   if (!s) {
-    s = live[0] ?? (await [...launching.values()][0]!.p);
+    // No free slot: download the model onto a running Ollama (GPU) server. A TPU model needs its own server.
+    const accel = kaggleAccelFor(model);
+    const gpu = live.find((x) => (x.accel ?? "gpu") === "gpu");
+    if (accel === "tpu" || !gpu) throw new Error(`Every Kaggle server slot is busy (${cfg().maxServers}); stop one to start a ${accel.toUpperCase()} server for ${model}.`);
+    s = gpu;
     await ensureKaggleModel(s, model, log);
     s = { ...s, models: [...s.models, model] };
     await save(relay, s);
@@ -208,11 +268,32 @@ export async function stopKaggleServers(relay: Relay, slot?: number): Promise<nu
   const stopped: number[] = [];
   for (const s of all.filter((x) => slot === undefined || x.slot === slot)) {
     await relay.r.hdel(SERVERS_KEY, String(s.slot));
+    await recordSession(relay, s, Date.now());
     for (const [m, r] of routes) if (r.slot === s.slot) routes.delete(m);
     const res = await fetch(`${s.url}/wdash/stop`, { method: "POST", headers: { Authorization: `Bearer ${s.key}` } }).catch(() => undefined);
     if (res?.ok) stopped.push(s.slot);
   }
   return stopped;
+}
+
+/** Start/Stop buttons on the website. Progress goes to K.kaggleLog, which the usage panel shows. */
+export async function handleKaggleControl(relay: Relay, ctl: KaggleControl): Promise<void> {
+  const log = async (text: string) => {
+    await relay.r.lpush(K.kaggleLog, JSON.stringify({ at: Date.now(), text }));
+    await relay.r.ltrim(K.kaggleLog, 0, 29);
+    await relay.r.expire(K.kaggleLog, 7 * 24 * 3600);
+  };
+  try {
+    if (ctl.action === "stop") {
+      const stopped = await stopKaggleServers(relay, ctl.slot);
+      await log(stopped.length ? `Stopped Kaggle server ${ctl.slot}.` : `Kaggle server ${ctl.slot} wasn't running.`);
+    } else {
+      const s = await ensureKaggleFor(relay, ctl.model, log);
+      await log(`Kaggle server ${s.slot} is ready with ${ctl.model}.`);
+    }
+  } catch (e) {
+    await log(`Failed: ${(e as Error).message}`);
+  }
 }
 
 export const isKaggleModel = (model: string) => model === "kaggle" || model.startsWith("kaggle:");

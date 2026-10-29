@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   KAGGLE_MODELS,
+  KAGGLE_TPU_MODELS,
   MAX_WORKERS,
   MODEL_PRESETS,
   NO_PROJECT,
@@ -26,7 +27,7 @@ const LAST_PROJECT = "wdash:lastProject";
 const REPO_PREFIX = "repo:";
 const AUTO_MODE = "wdash:autoMode";
 
-const CHAT_MODELS: Record<ChatModel, string> = { sonnet: "Sonnet", opus: "Opus", haiku: "Haiku", kaggle: "Kaggle GPU (open model, PC only)" };
+const CHAT_MODELS: Record<ChatModel, string> = { sonnet: "Sonnet", opus: "Opus", haiku: "Haiku", kaggle: "Kaggle GPU (open model, free)" };
 
 /** Hybrid form (SPEC.md §4): project + task up front, everything else under Advanced. Also starts chats. */
 export function NewJob({ kind = "team" }: { kind?: JobKind }) {
@@ -48,6 +49,9 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
   const [models, setModels] = useState<ModelPreset>("sonnet-haiku");
   const [chatModel, setChatModel] = useState<ChatModel>("sonnet");
   const [kaggleModel, setKaggleModel] = useState(KAGGLE_MODELS[0]!.id);
+  /** Anyone's GitHub repos for the agents to read: "owner/repo" or github.com URLs, separated by spaces, commas or lines. */
+  const [refs, setRefs] = useState("");
+  const refRepos = parseRepos(refs);
   /** "" = same as kaggleModel; a different model runs on a second Kaggle server. */
   const [kaggleWorkerModel, setKaggleWorkerModel] = useState("");
   /** Custom preset: each tier is a Claude model or "kaggle:<model>". */
@@ -122,8 +126,8 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
         kaggleModel: kaggle ? kaggleModel : "",
         kaggleWorkerModel: kaggle && !chat && kaggleWorkerModel !== kaggleModel ? kaggleWorkerModel : "",
         ...(custom ? tiers : {}),
-        // The Kaggle server is driven from the PC.
-        runOn: kaggle || customKaggle ? "home" : runOn,
+        refRepos,
+        runOn,
         reviewCap,
         autoMode,
         lite,
@@ -213,6 +217,16 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
         </div>
         <FileChips items={files.items} onRemove={files.remove} />
       </div>
+      <label className="block space-y-1">
+        <span className="text-sm font-medium">Reference repos (optional)</span>
+        <input
+          className="input"
+          placeholder="owner/repo or https://github.com/owner/repo — anyone's, separated by spaces or commas"
+          value={refs}
+          onChange={(e) => setRefs(e.target.value)}
+        />
+        {refRepos.length > 0 && <span className="block text-xs text-muted">Agents can read: {refRepos.join(", ")}</span>}
+      </label>
       {chat && (
         <Field label="Model">
           <select className="input sm:w-56" value={chatModel} onChange={(e) => setChatModel(e.target.value as ChatModel)}>
@@ -285,7 +299,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
                   <TierField label="Workers" value={tiers.workerModel} onChange={(v) => setTiers({ ...tiers, workerModel: v })} />
                   {customKaggle && (
                     <p className="text-xs text-muted sm:col-span-2">
-                      Kaggle tiers run free on your Kaggle GPU servers (one per model, up to 2), so this job runs on your PC. Claude tiers count toward the budget as usual.
+                      Kaggle tiers run free on your Kaggle GPU servers (one per model, up to 2), from your PC or the cloud. Claude tiers count toward the budget as usual.
                     </p>
                   )}
                 </>
@@ -302,7 +316,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
             </>
           )}
           <Field label="Run on">
-            <select className="input" value={kaggle || customKaggle ? "home" : runOn} disabled={kaggle || customKaggle} onChange={(e) => setRunOn(e.target.value)}>
+            <select className="input" value={runOn} onChange={(e) => setRunOn(e.target.value)}>
               <option value="auto">Auto (PC if online)</option>
               <option value="home">PC only (wait if offline)</option>
               <option value="cloud" disabled={selected && !selected.cloud}>
@@ -332,6 +346,16 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
   );
 }
 
+/** "owner/repo" from repo names and github.com URLs, deduplicated, at most 10. */
+function parseRepos(text: string): string[] {
+  const out = new Set<string>();
+  for (const part of text.split(/[\s,]+/)) {
+    const m = part.match(/^(?:https?:\/\/)?(?:www\.)?(?:github\.com\/)?([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?(?:[#?].*)?$/);
+    if (m) out.add(`${m[1]}/${m[2]}`);
+  }
+  return [...out].slice(0, 10);
+}
+
 /** One tier of a custom team: Claude or a Kaggle model. */
 function TierField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
@@ -349,6 +373,13 @@ function TierField({ label, value, onChange }: { label: string; value: string; o
             </option>
           ))}
         </optgroup>
+        <optgroup label="Kaggle TPU (free, experimental)">
+          {KAGGLE_TPU_MODELS.map((m) => (
+            <option key={m.id} value={`kaggle:${m.id}`}>
+              {m.label}
+            </option>
+          ))}
+        </optgroup>
       </select>
     </Field>
   );
@@ -359,11 +390,20 @@ function KaggleModelField({ label = "Kaggle model", value, onChange, same }: { l
     <Field label={label}>
       <select className="input" value={value} onChange={(e) => onChange(e.target.value)}>
         {same && <option value="">Same as orchestrator (one server)</option>}
-        {KAGGLE_MODELS.map((m) => (
-          <option key={m.id} value={m.id}>
-            {m.label}
-          </option>
-        ))}
+        <optgroup label="GPU">
+          {KAGGLE_MODELS.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
+          ))}
+        </optgroup>
+        <optgroup label="TPU (experimental)">
+          {KAGGLE_TPU_MODELS.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
+          ))}
+        </optgroup>
       </select>
     </Field>
   );

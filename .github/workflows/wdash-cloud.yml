@@ -2,7 +2,8 @@
 # Dispatched by the website on this repo; it checks out the job's project repo itself, so project repos
 # need no workflow or secrets of their own. Secrets live here, in the wdash repo:
 #   CLAUDE_CODE_OAUTH_TOKEN, WDASH_REDIS_URL, WDASH_PROJECTS_TOKEN (Contents read/write on the project repos),
-#   and optionally WDASH_VAPID_PUBLIC_KEY, WDASH_VAPID_PRIVATE_KEY, WDASH_WEB_URL, WDASH_VERCEL_TOKEN, WDASH_VERCEL_SCOPE.
+#   and optionally WDASH_VAPID_PUBLIC_KEY, WDASH_VAPID_PRIVATE_KEY, WDASH_WEB_URL, WDASH_VERCEL_TOKEN, WDASH_VERCEL_SCOPE,
+#   KAGGLE_USERNAME[_2], KAGGLE_API_TOKEN[_2], KAGGLE_MODELS, KAGGLE_MAX_SERVERS.
 # `wdash-daemon setup-cloud` sets them from the PC.
 name: wdash-cloud
 
@@ -80,5 +81,12 @@ jobs:
           # Lets agents deploy with vercel_deploy (optional).
           VERCEL_TOKEN: ${{ secrets.WDASH_VERCEL_TOKEN }}
           VERCEL_SCOPE: ${{ secrets.WDASH_VERCEL_SCOPE }}
+          # Kaggle model servers (optional): reuse running ones, start new ones on these accounts.
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KAGGLE_USERNAME_2: ${{ secrets.KAGGLE_USERNAME_2 }}
+          KAGGLE_API_TOKEN_2: ${{ secrets.KAGGLE_API_TOKEN_2 }}
+          KAGGLE_MODELS: ${{ secrets.KAGGLE_MODELS }}
+          KAGGLE_MAX_SERVERS: ${{ secrets.KAGGLE_MAX_SERVERS }}
           WDASH_STATE_DIR: ${{ runner.temp }}/wdash
         run: node wdash/daemon/dist/main.js cloud --job "${{ inputs.job_id }}" --repo project

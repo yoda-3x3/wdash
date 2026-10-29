@@ -354,7 +354,11 @@ export class JobRunner implements AgentHost, TeamApi {
   }
 
   private makeRunner(rec: AgentRecord, cwd: string, systemAppend: string): AgentRunner {
-    const runner = new AgentRunner(this, rec, { cwd, systemAppend, env: this.agentEnv, lite: this.job.lite });
+    const refs = this.job.refRepos ? this.job.refRepos.split(",").filter(Boolean) : [];
+    const refNote = refs.length
+      ? `\n\n# Reference repos\nThe user pointed this job at these GitHub repos for reference: ${refs.join(", ")}. Read them with open_repo when they help; don't push to them unless the task says so.`
+      : "";
+    const runner = new AgentRunner(this, rec, { cwd, systemAppend: systemAppend + refNote, env: this.agentEnv, lite: this.job.lite });
     this.agents.set(rec.id, runner);
     return runner;
   }

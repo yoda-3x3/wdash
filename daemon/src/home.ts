@@ -1,8 +1,9 @@
 import { hostname } from "node:os";
-import { K, NO_PROJECT, TERMINAL_STATUSES, scratchProject, type ProjectConfig } from "@wdash/shared";
+import { K, KaggleControl, NO_PROJECT, TERMINAL_STATUSES, scratchProject, type ProjectConfig } from "@wdash/shared";
 import { loadLocalProjects } from "./config.js";
 import { pushBase, syncIntoCheckout } from "./git.js";
 import { JobRunner } from "./job.js";
+import { handleKaggleControl, liveKaggleServers } from "./kaggle.js";
 import { clear, raise } from "./notify.js";
 import { processProjectRequests } from "./projects.js";
 import { Relay } from "./relay.js";
@@ -71,6 +72,8 @@ export async function runHome(): Promise<void> {
     } catch (e) {
       console.error("sync failed", e);
     }
+    // Notices Kaggle servers that idled off, so their GPU time is counted on the usage panel.
+    await liveKaggleServers(relay).catch((e) => console.error("kaggle check failed", (e as Error).message));
   };
   await sync();
   const syncTimer = setInterval(sync, 5 * 60_000);
@@ -118,6 +121,17 @@ export async function runHome(): Promise<void> {
     }
     if (!next) continue;
     if (next.queue === K.projectQueue) createProjects(next.id);
+    // Start/Stop from the website; a start takes minutes, so it runs off the loop.
+    else if (next.queue === K.kaggleQueue) {
+      let raw: unknown;
+      try {
+        raw = JSON.parse(next.id);
+      } catch {
+        /* not ours */
+      }
+      const ctl = KaggleControl.safeParse(raw);
+      if (ctl.success) void handleKaggleControl(relay, ctl.data);
+    }
     else if (next.queue === K.pingQueue) await pong(next.id).catch((e) => console.error("ping failed", (e as Error).message));
     // Paused while we were waiting: put the job back where it was (next in line).
     else if (await relay.isPaused().catch(() => false)) await relay.r.rpush(K.homeQueue, next.id);

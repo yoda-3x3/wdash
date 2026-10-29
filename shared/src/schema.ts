@@ -74,8 +74,8 @@ export const MODEL_PRESETS: Record<ModelPreset, { orchestrator: string; lead: st
   "opus-opus": { orchestrator: "opus", lead: "opus", worker: "opus", label: "Opus everywhere" },
   "sonnet-haiku": { orchestrator: "sonnet", lead: "sonnet", worker: "haiku", label: "Sonnet orchestrator + Haiku workers" },
   "opus-sonnet-haiku": { orchestrator: "opus", lead: "sonnet", worker: "haiku", label: "Opus orchestrator + Haiku workers" },
-  // Open model on the free Kaggle GPU server (daemon/src/kaggle.ts). PC only.
-  kaggle: { orchestrator: "kaggle", lead: "kaggle", worker: "kaggle", label: "Kaggle GPU (open model, free, PC only)" },
+  // Open model on the free Kaggle GPU server (daemon/src/kaggle.ts).
+  kaggle: { orchestrator: "kaggle", lead: "kaggle", worker: "kaggle", label: "Kaggle GPU (open model, free)" },
   // Each tier from the job's orchestratorModel/leadModel/workerModel; these are the fallbacks.
   custom: { orchestrator: "sonnet", lead: "sonnet", worker: "haiku", label: "Custom: pick each tier (mix Claude and Kaggle)" },
 };
@@ -100,6 +100,29 @@ export const KAGGLE_MODELS: Array<{ id: string; label: string }> = [
   { id: "gpt-oss:20b", label: "gpt-oss 20B (fastest)" },
   { id: "qwen3-coder:30b", label: "Qwen3 Coder 30B (tool calls unreliable)" },
 ];
+/** One finished Kaggle server session (start = notebook pushed, end = last seen alive). */
+export type KaggleSession = { user: string; slot: number; start: number; end: number; accel?: KaggleAccel };
+/** Kaggle's free GPU allowance per account per week (TPU has its own 20 h). */
+export const KAGGLE_GPU_HOURS_PER_WEEK = 30;
+export const KAGGLE_TPU_HOURS_PER_WEEK = 20;
+
+/** GPU servers run Ollama (models like "qwen3.8:27b"); TPU servers run vLLM (Hugging Face ids like "Qwen/Qwen3-32B"). */
+export type KaggleAccel = "gpu" | "tpu";
+export const kaggleAccelFor = (model: string): KaggleAccel => (model.includes("/") && !model.includes(":") ? "tpu" : "gpu");
+
+/** Open models for a Kaggle TPU v5e-8 (8 chips, 128 GB HBM), served by vLLM. Experimental. */
+export const KAGGLE_TPU_MODELS: Array<{ id: string; label: string }> = [
+  { id: "Qwen/Qwen3-32B", label: "Qwen3 32B (TPU, experimental)" },
+  { id: "Qwen/Qwen3-30B-A3B-Instruct-2507", label: "Qwen3 30B MoE (TPU, experimental)" },
+];
+
+/** Website -> daemon: start or stop a Kaggle server (LIST K.kaggleQueue). */
+export const KaggleControl = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("start"), model: z.string().min(1).max(100).regex(/^[\w.:/-]+$/) }),
+  z.object({ action: z.literal("stop"), slot: z.number().int().min(1).max(9) }),
+]);
+export type KaggleControl = z.infer<typeof KaggleControl>;
+
 /** An Ollama model name ("qwen3.8:27b", "user/model:tag"). Empty = the server's default. */
 export const KaggleModel = z.string().max(100).regex(/^[\w.:/-]*$/, "not an Ollama model name");
 
@@ -146,6 +169,8 @@ export const JobRecord = z.object({
   orchestratorModel: TierModel.default(""),
   leadModel: TierModel.default(""),
   workerModel: TierModel.default(""),
+  /** Other GitHub repos (owner/repo, comma-separated) the agents should read for reference via open_repo. */
+  refRepos: z.string().max(1000).default(""),
   workers: z.string().default("auto"), // "auto" | "1"..String(MAX_WORKERS)
   budgetUsd: num,
   reviewCap: num.default(3),
@@ -240,6 +265,7 @@ export const NewJobInput = z.object({
   orchestratorModel: TierModel.default(""),
   leadModel: TierModel.default(""),
   workerModel: TierModel.default(""),
+  refRepos: z.array(z.string().regex(/^[\w.-]+\/[\w.-]+$/, "owner/repo")).max(10).default([]),
   workers: z.enum(WORKER_CHOICES).default("auto"),
   budgetUsd: z.number().positive().max(500).optional(),
   reviewCap: z.number().int().min(1).max(10).default(3),

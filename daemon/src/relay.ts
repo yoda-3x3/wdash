@@ -231,11 +231,12 @@ export class Relay {
   }
 
   /**
-   * One blocking pop across everything the home daemon waits on (jobs, "new project" requests, pings), so an idle
+   * One blocking pop across everything the home daemon waits on (jobs, "new project" requests, pings, Kaggle server buttons), so an idle
    * daemon costs one request a minute instead of polling each queue. `jobs: false` leaves jobs queued.
    */
   async popHomeWork(timeoutSec: number, jobs = true): Promise<{ queue: string; id: string } | undefined> {
-    const queues = jobs ? [K.homeQueue, K.projectQueue, K.pingQueue] : [K.projectQueue, K.pingQueue];
+    const other = [K.projectQueue, K.pingQueue, K.kaggleQueue];
+    const queues = jobs ? [K.homeQueue, ...other] : other;
     const res = await this.blocking.brpop(...queues, timeoutSec);
     return res ? { queue: res[0], id: res[1] } : undefined;
   }

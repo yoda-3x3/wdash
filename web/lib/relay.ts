@@ -100,6 +100,7 @@ export async function createJob(input: NewJobInput, project: ProjectConfig): Pro
     orchestratorModel: input.orchestratorModel,
     leadModel: input.leadModel,
     workerModel: input.workerModel,
+    refRepos: input.refRepos.join(","),
     workers: input.workers,
     budgetUsd: input.budgetUsd ?? project.defaultBudgetUsd,
     // Low usage mode: one review round per worker before asking the user.

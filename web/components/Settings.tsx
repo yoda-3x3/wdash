@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import type { ProjectConfig } from "@wdash/shared";
 import { api, timeAgo, usePoll } from "@/lib/client";
 import { useBoard } from "./Shell";
+import { Usage } from "./Usage";
 
 function b64ToUint8(b64: string): Uint8Array<ArrayBuffer> {
   const pad = "=".repeat((4 - (b64.length % 4)) % 4);
@@ -93,6 +94,8 @@ export function Settings({ login, vapidKey }: { login: string; vapidKey: string 
           {state?.home.lastSeen && <span className="text-muted"> · heartbeat {timeAgo(state.home.lastSeen)}</span>}
         </p>
       </section>
+
+      <Usage />
 
       <section className="card space-y-2 p-4">
         <h2 className="font-medium">Projects</h2>
