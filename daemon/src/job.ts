@@ -16,11 +16,14 @@ import {
   TERMINAL_STATUSES,
   branchFor,
   newId,
+  kaggleHours,
   truncate,
   type AgentRecord,
   type Approval,
   type Command,
   type JobRecord,
+  type KaggleAccel,
+  type KaggleSession,
   type ProjectConfig,
   type AttentionReason,
 } from "@wdash/shared";
@@ -69,7 +72,8 @@ const MAX_HELPERS = 5;
 
 const ORCH = "orchestrator";
 
-type UsageTotals = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; turns: number };
+/** `apiMs`: time spent waiting on the model, for output tokens per second. */
+type UsageTotals = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; turns: number; apiMs?: number };
 
 export class JobRunner implements AgentHost, TeamApi {
   readonly jobId: string;
@@ -88,6 +92,8 @@ export class JobRunner implements AgentHost, TeamApi {
   private fileCache = new Map<string, Buffer>();
   /** Each agent's usage totals from earlier runs, read once per run. */
   private usageBase = new Map<string, UsageTotals>();
+  /** This run's totals at an agent's previous result, so each turn's own speed can be measured. */
+  private lastRun = new Map<string, { out: number; apiMs: number }>();
   private finishing = false;
   private lastCheckpointAt = 0;
   private budgetWarned = false;
@@ -1138,16 +1144,29 @@ export class JobRunner implements AgentHost, TeamApi {
       this.usageBase.set(agent.id, base);
     }
     const u = r.usage as unknown as Record<string, number>;
+    // Output tokens per second: this turn's (since the previous result of the same run) and the agent's average.
+    const runOut = u.output_tokens ?? 0;
+    const runMs = r.duration_api_ms ?? 0;
+    const prev = this.lastRun.get(agent.id);
+    const fresh = !prev || runOut < prev.out || runMs < prev.apiMs; // a new run (restart/resume) starts from zero
+    const dOut = runOut - (fresh ? 0 : prev.out);
+    const dMs = runMs - (fresh ? 0 : prev.apiMs);
+    this.lastRun.set(agent.id, { out: runOut, apiMs: runMs });
+    const outputTokens = base.outputTokens + runOut;
+    const apiMs = (base.apiMs ?? 0) + runMs;
     await this.relay.r.hset(
       K.usage(this.jobId),
       agent.id,
       JSON.stringify({
         costUsd: agent.rec.costUsd,
         inputTokens: base.inputTokens + (u.input_tokens ?? 0),
-        outputTokens: base.outputTokens + (u.output_tokens ?? 0),
+        outputTokens,
         cacheReadTokens: base.cacheReadTokens + (u.cache_read_input_tokens ?? 0),
         cacheWriteTokens: base.cacheWriteTokens + (u.cache_creation_input_tokens ?? 0),
         turns: base.turns + (r.num_turns ?? 0),
+        apiMs,
+        tps: apiMs > 0 ? Math.round((outputTokens / apiMs) * 10_000) / 10 : undefined,
+        lastTps: dMs > 500 && dOut > 0 ? Math.round((dOut / dMs) * 10_000) / 10 : undefined,
         model: agent.rec.model,
       }),
     );
@@ -1306,6 +1325,66 @@ export class JobRunner implements AgentHost, TeamApi {
     const out = await pushRepo(a.cwd, repo, message);
     await this.relay.emit({ jobId: this.jobId, agentId: fromId, type: "info", payload: { text: out } });
     return out;
+  }
+
+  /** Facts for a usage estimate (usage_quote tool): this job so far, past jobs, Claude limits, Kaggle hours. */
+  async usageQuote(): Promise<string> {
+    const j = (await this.relay.getJob(this.jobId)) ?? this.job;
+    const k = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1000)}k`);
+    const tiers = j.kind === "chat" ? this.roleModel("chat") : `${this.roleModel("orchestrator")} orchestrator, ${this.roleModel("lead")} leads, ${this.roleModel("worker")} workers`;
+    const agentsNow = this.agents.size;
+    const out: string[] = [
+      "# This job",
+      `Models: ${tiers} (preset ${j.models}). Workers: ${j.workers}. Shape: ${j.shape}. Low usage mode: ${j.lite ? "on" : "off"}.`,
+      `Used so far: $${j.costUsd.toFixed(2)} of a $${j.budgetUsd} budget (API-equivalent), ${k(j.tokensIn)} tokens in / ${k(j.tokensOut)} out, ${agentsNow} agent(s), ${Math.round((Date.now() - j.createdAt) / 60_000)} min.`,
+    ];
+
+    // Finished jobs with a cost, newest first; "similar" = same kind and model preset.
+    const past: Array<{ job: JobRecord; agents: number }> = [];
+    for (const id of await this.relay.r.zrevrange(K.jobs, 0, 80)) {
+      if (id === this.jobId || past.length >= 30) continue;
+      const pj = await this.relay.getJob(id).catch(() => undefined);
+      if (!pj || !TERMINAL_STATUSES.includes(pj.status) || !(pj.costUsd > 0)) continue;
+      past.push({ job: pj, agents: (await this.relay.getAgents(id).catch(() => [])).length });
+    }
+    const similar = past.filter((p) => p.job.kind === j.kind && p.job.models === j.models);
+    const pool = similar.length >= 3 ? similar : past.filter((p) => p.job.kind === j.kind);
+    const median = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]! : 0);
+    const mins = (p: { job: JobRecord }) => Math.max(1, Math.round((p.job.updatedAt - p.job.createdAt) / 60_000));
+    out.push("", `# Past ${j.kind} jobs (${similar.length >= 3 ? `same preset ${j.models}` : "all presets"}, newest first)`);
+    if (!pool.length) out.push("No finished jobs with costs yet: estimate from the plan size (roughly $0.05-0.30 per Haiku/Sonnet agent for small tasks, several times that for Opus).");
+    for (const p of pool.slice(0, 10)) {
+      out.push(`- "${p.job.title.slice(0, 60)}": ${p.job.models}, ${p.agents} agent(s), $${p.job.costUsd.toFixed(2)}, ${k(p.job.tokensIn)} in / ${k(p.job.tokensOut)} out, ~${mins(p)} min, ${p.job.status}`);
+    }
+    if (pool.length) {
+      const perAgent = pool.filter((p) => p.agents > 0).map((p) => p.job.costUsd / p.agents);
+      out.push(
+        `Medians over ${pool.length}: $${median(pool.map((p) => p.job.costUsd)).toFixed(2)} per job, $${median(perAgent).toFixed(2)} per agent, ${k(median(pool.map((p) => p.job.tokensIn + p.job.tokensOut)))} tokens, ~${median(pool.map(mins))} min.`,
+      );
+    }
+
+    out.push("", "# Claude subscription limits (latest reported)");
+    const limits = Object.entries(await this.relay.r.hgetall(K.rateLimit))
+      .map(([type, raw]) => ({ type, ...(JSON.parse(raw) as { utilization?: number; resetsAt?: number; status?: string }) }))
+      .filter((l) => !l.resetsAt || l.resetsAt * 1000 > Date.now());
+    if (!limits.length) out.push("None reported yet (no recent Claude turns).");
+    for (const l of limits) {
+      const pct = typeof l.utilization === "number" ? `${Math.round((l.utilization > 1.5 ? l.utilization / 100 : l.utilization) * 100)}% used` : (l.status ?? "?");
+      out.push(`- ${l.type}: ${pct}${l.resetsAt ? `, resets ${new Date(l.resetsAt * 1000).toLocaleString()}` : ""}`);
+    }
+
+    const sessions = (await this.relay.r.zrangebyscore(K.kaggleSessions, Date.now() - 7 * 86_400_000, "+inf")).map((s) => JSON.parse(s) as KaggleSession);
+    const running = Object.values(await this.relay.r.hgetall(K.kaggleServers)).map((s) => JSON.parse(s) as { user?: string; accel?: KaggleAccel; startedAt: number });
+    const hours = kaggleHours(sessions, running, Date.now());
+    out.push("", "# Kaggle (free open models)");
+    out.push(hours.length ? hours.map((h) => `- ${h.user} ${h.accel.toUpperCase()}: ${h.hours} of ${h.quota} h used in the last 7 days`).join("\n") : "No Kaggle hours used in the last 7 days.");
+    out.push(`${running.length} server(s) running. Kaggle agents cost $0 and no Claude limits, but are slower (roughly 30-60 s per turn) and use Kaggle hours; a cold server takes 5-15 min to boot.`);
+
+    out.push(
+      "",
+      "Dollar figures are API-equivalent: on a Claude subscription the real cost is the share of the limits above. Quote a range (cost, tokens, time, and what share of the 5-hour/weekly limit it may take, judged from past jobs and current use), say what drives it (number of agents, model, review rounds), and say it's an estimate.",
+    );
+    return out.join("\n");
   }
 
   async vercelDeploy(fromId: string, path: string, project: string | undefined, production: boolean): Promise<string> {

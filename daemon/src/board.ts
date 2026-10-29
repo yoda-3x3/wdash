@@ -18,6 +18,7 @@ export interface TeamApi {
   openRepo(fromId: string, repo: string): Promise<string>;
   pushRepo(fromId: string, repo: string, message: string): Promise<string>;
   vercelDeploy(fromId: string, path: string, project: string | undefined, production: boolean): Promise<string>;
+  usageQuote(): Promise<string>;
   // orchestrator, and leads for their own workers (`by`: who is acting; defaults to the orchestrator)
   submitPlan(summary: string, workers: PlannedWorker[]): Promise<string>;
   spawnWorker(w: PlannedWorker, by?: string): Promise<string>;
@@ -55,6 +56,16 @@ function shareTool(api: TeamApi, selfId: string) {
       note: z.string().max(500).optional().describe("One line shown with the file"),
     },
     (a) => wrap(() => api.shareFile(selfId, a.path, a.note)),
+  );
+}
+
+/** Numbers for estimating what a job will use, so the agent can give the user a quote. */
+function quoteTool(api: TeamApi) {
+  return tool(
+    "usage_quote",
+    "Get the numbers for a usage estimate: what this job has used so far, what similar past jobs cost (API-equivalent $, tokens, minutes, workers), how far through the Claude subscription limits the user is, and Kaggle hours left. Call it before quoting the user a cost.",
+    {},
+    () => wrap(() => api.usageQuote()),
   );
 }
 
@@ -122,6 +133,7 @@ export function orchestratorServer(api: TeamApi, selfId: string): McpSdkServerCo
     tools: [
       shareTool(api, selfId),
       deployTool(api, selfId),
+      quoteTool(api),
       tool(
         "team_plan",
         `Submit the plan: split the task across 1-${MAX_WORKERS} workers (or leads, lead: true), each owning non-overlapping path globs. Plans with 3+ items wait for the user's approval; smaller plans start immediately.`,
@@ -175,6 +187,7 @@ export function leadServer(api: TeamApi, selfId: string): McpSdkServerConfigWith
     version: "0.1.0",
     tools: [
       shareTool(api, selfId),
+      quoteTool(api),
       tool(
         "team_spawn_worker",
         "Start one of YOUR workers. Its globs must be inside your own area and not overlap your other workers'. Its branch starts from yours.",
@@ -226,7 +239,7 @@ export function leadServer(api: TeamApi, selfId: string): McpSdkServerConfigWith
 
 /** Chat agents work alone: no board tools, just sharing files. */
 export function chatServer(api: TeamApi, selfId: string): McpSdkServerConfigWithInstance {
-  return createSdkMcpServer({ name: "wdash", version: "0.1.0", tools: [shareTool(api, selfId), ...repoTools(api, selfId), deployTool(api, selfId)] });
+  return createSdkMcpServer({ name: "wdash", version: "0.1.0", tools: [shareTool(api, selfId), ...repoTools(api, selfId), deployTool(api, selfId), quoteTool(api)] });
 }
 
 export function workerServer(api: TeamApi, selfId: string): McpSdkServerConfigWithInstance {

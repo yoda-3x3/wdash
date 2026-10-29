@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { TERMINAL_STATUSES, type WdEvent } from "@wdash/shared";
+import { K, TERMINAL_STATUSES, type WdEvent } from "@wdash/shared";
 import { requireApiUser } from "@/lib/auth";
+import { hgetall, redis } from "@/lib/redis";
 import { getAgents, getEvents, getRecentEvents, listJobs } from "@/lib/relay";
 
 export const dynamic = "force-dynamic";
@@ -42,5 +43,46 @@ export async function GET(req: Request) {
     if (o.cursor) next[o.job.id] = o.cursor;
     events[o.job.id] = o.events;
   }
-  return NextResponse.json({ jobs: out.map(({ job, agents }) => ({ job, agents })), events, cursors: next, now });
+  const tech = new URL(req.url).searchParams.get("t") === "1" ? await diagnostics(jobs.map((j) => j.id)) : undefined;
+  return NextResponse.json({ jobs: out.map(({ job, agents }) => ({ job, agents })), events, cursors: next, now, tech });
+}
+
+/** Technical mode (Settings): per-agent usage and leases for each job, plus system state. Costs a few extra Redis reads per poll. */
+async function diagnostics(jobIds: string[]) {
+  const r = redis();
+  const perJob = await Promise.all(
+    jobIds.map(async (id) => {
+      const [usage, lease, leaseTtl, pending] = await Promise.all([hgetall(K.usage(id)), r.get<string>(K.lease(id)), r.ttl(K.lease(id)), hgetall(K.approvals(id))]);
+      const agentUsage = Object.fromEntries(Object.entries(usage).map(([a, v]) => [a, JSON.parse(v) as Record<string, number | string>]));
+      const waiting = Object.values(pending).filter((v) => (JSON.parse(v) as { status?: string }).status === "pending").length;
+      return [id, { usage: agentUsage, lease, leaseTtl, pendingApprovals: waiting }] as const;
+    }),
+  );
+  const [heartbeat, heartbeatTtl, kaggle, limits, homeQueue, attention, keys] = await Promise.all([
+    r.get<string>(K.homeHeartbeat),
+    r.ttl(K.homeHeartbeat),
+    hgetall(K.kaggleServers),
+    hgetall(K.rateLimit),
+    r.llen(K.homeQueue),
+    r.hlen(K.attention),
+    r.dbsize(),
+  ]);
+  return {
+    jobs: Object.fromEntries(perJob),
+    sys: {
+      heartbeatAt: heartbeat ? Number(heartbeat) : undefined,
+      heartbeatTtl,
+      homeQueue,
+      attention,
+      redisKeys: keys,
+      kaggle: Object.values(kaggle).map((v) => {
+        const s = JSON.parse(v) as { slot: number; models: string[]; accel?: string; user?: string; startedAt: number; lastSeen?: number };
+        return { slot: s.slot, models: s.models, accel: s.accel ?? "gpu", user: s.user, startedAt: s.startedAt, lastSeen: s.lastSeen };
+      }),
+      limits: Object.entries(limits).map(([type, v]) => {
+        const l = JSON.parse(v) as { utilization?: number; resetsAt?: number; status?: string; updatedAt?: number };
+        return { type, utilization: l.utilization, resetsAt: l.resetsAt, status: l.status, updatedAt: l.updatedAt };
+      }),
+    },
+  };
 }

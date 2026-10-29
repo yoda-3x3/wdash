@@ -80,7 +80,7 @@ export function JobView({ id }: { id: string }) {
       </div>
 
       {tab === "timeline" && <Timeline events={events} agents={agents} />}
-      {tab === "team" && <Team job={job} agents={agents} events={events} claims={detail.claims} onChange={refresh} />}
+      {tab === "team" && <Team job={job} agents={agents} events={events} claims={detail.claims} usage={detail.usage} onChange={refresh} />}
       {tab === "diff" && <Diffs events={events} job={job} />}
       {tab === "usage" && <Usage job={job} agents={agents} usage={detail.usage} />}
 
@@ -589,7 +589,7 @@ function summarizeInput(input: unknown): string {
 
 // ---------------------------------------------------------------- team
 
-function Team({ job, agents, events, claims, onChange }: { job: JobRecord; agents: AgentRecord[]; events: WdEvent[]; claims: Record<string, string>; onChange: () => void }) {
+function Team({ job, agents, events, claims, usage, onChange }: { job: JobRecord; agents: AgentRecord[]; events: WdEvent[]; claims: Record<string, string>; usage: Detail["usage"]; onChange: () => void }) {
   const plan = [...events].reverse().find((e) => e.type === "plan");
   const board = events.filter((e) => e.type === "board").slice(-40);
   const [edits, setEdits] = useState("");
@@ -633,6 +633,7 @@ function Team({ job, agents, events, claims, onChange }: { job: JobRecord; agent
                 {a.role === "lead" && <span className="rounded bg-accent/15 px-1.5 text-[10px] font-semibold uppercase text-accent">lead</span>}
                 {a.parent && a.parent !== "orchestrator" && <span className="text-[11px] text-muted">under {a.parent}</span>}
                 <span className="text-xs text-muted">{a.model}</span>
+                <Speed u={usage[a.id]} />
                 <span className="ml-auto">
                   <StatusChip status={a.status} />
                 </span>
@@ -788,7 +789,7 @@ function Usage({ job, agents, usage }: { job: JobRecord; agents: AgentRecord[]; 
         <table className="w-full text-left text-xs">
           <thead className="text-muted">
             <tr>
-              {["agent", "model", "cost", "in", "out", "cache read", "cache write", "turns"].map((h) => (
+              {["agent", "model", "cost", "in", "out", "tok/s", "cache read", "cache write", "turns"].map((h) => (
                 <th key={h} className="px-3 py-2 font-medium">
                   {h}
                 </th>
@@ -815,6 +816,17 @@ function Usage({ job, agents, usage }: { job: JobRecord; agents: AgentRecord[]; 
         </table>
       </div>
     </div>
+  );
+}
+
+/** Output tokens per second: the latest turn's, with the agent's average on hover. */
+function Speed({ u }: { u?: Record<string, number | string> }) {
+  const last = Number(u?.lastTps ?? u?.tps);
+  if (!u || !Number.isFinite(last) || last <= 0) return null;
+  return (
+    <span className="text-[11px] text-muted" title={`Output speed: ${last} tokens/s on the latest turn, ${u.tps ?? "?"} tokens/s on average (time waiting on the model)`}>
+      {last >= 10 ? Math.round(last) : last} tok/s
+    </span>
   );
 }
 

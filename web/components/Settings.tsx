@@ -5,6 +5,7 @@ import { signOut } from "next-auth/react";
 import { useEffect, useState } from "react";
 import type { ProjectConfig } from "@wdash/shared";
 import { api, timeAgo, usePoll } from "@/lib/client";
+import { setTechMode, useTechMode } from "@/lib/tech";
 import { useBoard } from "./Shell";
 import { Usage } from "./Usage";
 
@@ -21,6 +22,7 @@ export function Settings({ login, vapidKey }: { login: string; vapidKey: string 
   const { data } = usePoll<{ projects: ProjectConfig[] }>("/api/projects", 60_000);
   const [push, setPush] = useState<"unsupported" | "off" | "on" | "denied" | "loading">("loading");
   const [msg, setMsg] = useState<string>();
+  const tech = useTechMode();
 
   useEffect(() => {
     (async () => {
@@ -93,6 +95,21 @@ export function Settings({ login, vapidKey }: { login: string; vapidKey: string 
           {!state ? <span className="text-muted">…</span> : state.home.online ? <span className="text-ok">Online</span> : <span className="text-muted">Offline</span>}
           {state?.home.lastSeen && <span className="text-muted"> · heartbeat {timeAgo(state.home.lastSeen)}</span>}
         </p>
+      </section>
+
+      <section className="card space-y-2 p-4">
+        <h2 className="font-medium">Technical mode</h2>
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={tech} onChange={(e) => setTechMode(e.target.checked)} />
+          <span>
+            Show every diagnostic on the Wall
+            <span className="block text-xs text-muted">
+              Per agent: tokens in/out, cache, turns, tokens/s, last activity, session, branch, review rounds, files owned. Per job: lease holder, location, budget,
+              pending approvals. System: PC heartbeat, poll latency, event rate, queue, Kaggle servers, Claude limits, Redis keys. Saved on this device; adds a few Redis
+              reads per Wall refresh.
+            </span>
+          </span>
+        </label>
       </section>
 
       <Usage />

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentRecord, Attention, AttentionAction, JobRecord, WdEvent } from "@wdash/shared";
 import { projectLabel } from "@wdash/shared";
 import { api, usd } from "@/lib/client";
+import { setTechMode, useTechMode } from "@/lib/tech";
 import { useBoard } from "./Shell";
 
 // The wall: every agent across every live job as a terminal tile streaming its output.
@@ -14,7 +15,26 @@ type WallResponse = {
   events: Record<string, WdEvent[]>;
   cursors: Record<string, string>;
   now: number;
+  /** Technical mode only. */
+  tech?: Tech;
 };
+
+type AgentUsage = Record<string, number | string>;
+type JobDiag = { usage: Record<string, AgentUsage>; lease: string | null; leaseTtl: number; pendingApprovals: number };
+type Tech = {
+  jobs: Record<string, JobDiag>;
+  sys: {
+    heartbeatAt?: number;
+    heartbeatTtl: number;
+    homeQueue: number;
+    attention: number;
+    redisKeys: number;
+    kaggle: Array<{ slot: number; models: string[]; accel: string; user?: string; startedAt: number; lastSeen?: number }>;
+    limits: Array<{ type: string; utilization?: number; resetsAt?: number; status?: string; updatedAt?: number }>;
+  };
+};
+/** Client-side measurements of the Wall's own polling. */
+type PollStats = { ms: number; at: number; delay: number; events: number };
 
 type Line = { key: string; ts: number; tone: Tone; text: string; sub?: string };
 type Tone = "fg" | "muted" | "tool" | "ok" | "bad" | "warn" | "user" | "plan";
@@ -57,6 +77,11 @@ export function Wall() {
   const [hideDone, setHideDone] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const wallRef = useRef<HTMLDivElement>(null);
+  const tech = useTechMode();
+  const techRef = useRef(tech);
+  techRef.current = tech;
+  const [diag, setDiag] = useState<Tech>();
+  const [poll, setPoll] = useState<PollStats>();
 
   // Per-viewer prefs (tile size, filters); storage may be unavailable.
   useEffect(() => {
@@ -85,13 +110,17 @@ export function Wall() {
       if (stop) return;
       if (document.visibilityState === "visible") {
         try {
-          const res = await api<WallResponse>(`/api/wall?c=${encodeURIComponent(JSON.stringify(cursors.current))}`);
+          const t0 = performance.now();
+          const res = await api<WallResponse>(`/api/wall?c=${encodeURIComponent(JSON.stringify(cursors.current))}${techRef.current ? "&t=1" : ""}`);
           if (stop) return;
           cursors.current = res.cursors;
           setJobs(res.jobs);
           setLines((prev) => mergeLines(prev, res));
           setLoaded(true);
-          const busy = Object.values(res.events).some((e) => e.length > 0);
+          setDiag(res.tech);
+          const count = Object.values(res.events).reduce((s, e) => s + e.length, 0);
+          setPoll({ ms: Math.round(performance.now() - t0), at: Date.now(), delay, events: count });
+          const busy = count > 0;
           delay = busy ? 2000 : Math.min(delay * 1.5, 8000);
         } catch {
           /* retry next tick */
@@ -148,6 +177,9 @@ export function Wall() {
           <label className="flex items-center gap-1">
             <input type="checkbox" checked={hideDone} onChange={(e) => setHideDone(e.target.checked)} /> hide finished
           </label>
+          <label className="flex items-center gap-1" title="Technical mode: every diagnostic (also in Settings)">
+            <input type="checkbox" checked={tech} onChange={(e) => setTechMode(e.target.checked)} /> tech
+          </label>
           <span className="flex overflow-hidden rounded border border-[#2a2f39]">
             {(Object.keys(SIZES) as Size[]).map((s) => (
               <button key={s} onClick={() => setSize(s)} className={`px-2 py-0.5 ${size === s ? "bg-[#2a2f39] text-[#d6dae0]" : ""}`}>
@@ -167,6 +199,8 @@ export function Wall() {
         </span>
       </div>
 
+      {tech && <SysBar diag={diag} poll={poll} tiles={tiles.map((t) => ({ agent: t.agent, usage: diag?.jobs[t.job.id]?.usage[t.agent.id] }))} />}
+
       {!loaded ? (
         <p className="p-4 font-mono text-sm text-[#7d8590]">connecting…</p>
       ) : tiles.length === 0 ? (
@@ -183,8 +217,9 @@ export function Wall() {
               agent={t.agent}
               lines={lines[t.key] ?? []}
               attention={attentionByTile.get(t.key) ?? []}
-              height={dims.h}
+              height={tech ? dims.h + 96 : dims.h}
               onActed={refreshBoard}
+              diag={tech ? { job: diag?.jobs[t.job.id], usage: diag?.jobs[t.job.id]?.usage[t.agent.id], events: lines[t.key]?.length ?? 0 } : undefined}
             />
           ))}
         </div>
@@ -201,6 +236,7 @@ function Tile({
   attention,
   height,
   onActed,
+  diag,
 }: {
   /** 1-5: shown as a badge; holding up that many fingers (camera gestures) opens the tile. */
   n?: number;
@@ -210,6 +246,8 @@ function Tile({
   attention: Attention[];
   height: number;
   onActed: () => void;
+  /** Technical mode. */
+  diag?: { job?: JobDiag; usage?: AgentUsage; events: number };
 }) {
   const body = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -246,6 +284,7 @@ function Tile({
           {agent.model} {usd(agent.costUsd)}
         </span>
       </Link>
+      {diag && <AgentDiag job={job} agent={agent} diag={diag} />}
       <div
         ref={body}
         className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 py-1"
@@ -264,6 +303,94 @@ function Tile({
       </div>
       {needsYou && <TileActions att={attention[0]!} more={attention.length - 1} onActed={onActed} />}
     </section>
+  );
+}
+
+const kfmt = (n: unknown) => {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return "—";
+  return v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(Math.round(v));
+};
+const ago = (ts: number | undefined, now = Date.now()) => {
+  if (!ts) return "—";
+  const s = Math.max(0, Math.round((now - ts) / 1000));
+  return s < 90 ? `${s}s` : s < 5400 ? `${Math.round(s / 60)}m` : `${(s / 3600).toFixed(1)}h`;
+};
+const pct = (u?: number) => (typeof u === "number" ? `${Math.round((u > 1.5 ? u / 100 : u) * 100)}%` : "?");
+
+/** Technical mode: one agent's (and its job's) numbers, as a dense key/value grid under the tile header. */
+function AgentDiag({ job, agent, diag }: { job: JobRecord; agent: AgentRecord; diag: { job?: JobDiag; usage?: AgentUsage; events: number } }) {
+  const u = diag.usage ?? {};
+  const j = diag.job;
+  const cells: Array<[string, string, string?]> = [
+    ["status", agent.status],
+    ["role", agent.parent && agent.parent !== "orchestrator" ? `${agent.role} < ${agent.parent}` : agent.role],
+    ["active", ago(agent.lastEventAt), agent.lastEventAt ? new Date(agent.lastEventAt).toLocaleTimeString() : undefined],
+    ["tok/s", u.lastTps ? `${u.lastTps} (avg ${u.tps ?? "?"})` : u.tps ? `avg ${u.tps}` : "—", "Output tokens per second: latest turn (average)"],
+    ["in", kfmt(u.inputTokens)],
+    ["out", kfmt(u.outputTokens)],
+    ["cache r/w", `${kfmt(u.cacheReadTokens)}/${kfmt(u.cacheWriteTokens)}`],
+    ["turns", String(u.turns ?? "—")],
+    ["api time", u.apiMs ? `${Math.round(Number(u.apiMs) / 1000)}s` : "—", "Time spent waiting on the model"],
+    ["reviews", String(agent.reviewRounds ?? 0)],
+    ["lines", String(diag.events)],
+    ["session", agent.sessionId ? agent.sessionId.slice(0, 8) : "—", agent.sessionId],
+    ["branch", agent.branch ? agent.branch.replace(`wdash/${job.id}/`, "") : "—", agent.branch],
+    ["owns", agent.globs.length ? `${agent.globs.length} glob${agent.globs.length === 1 ? "" : "s"}` : "—", agent.globs.join(", ")],
+    ["job", `${job.status} @ ${job.location}`, job.id],
+    ["lease", j?.lease ? `${j.lease} (${j.leaseTtl}s)` : "none", "Which runner owns the job, and seconds left on its lease"],
+    ["budget", `${Math.round((job.costUsd / Math.max(job.budgetUsd, 0.01)) * 100)}% of $${job.budgetUsd}`],
+    ["pending", String(j?.pendingApprovals ?? 0), "Permission requests and questions waiting on you"],
+    ["age", ago(job.createdAt), new Date(job.createdAt).toLocaleString()],
+    ["flags", [job.autoMode && "auto", job.lite && "lite", job.shape !== "auto" && job.shape, job.runOn !== "auto" && job.runOn].filter(Boolean).join(" ") || "—"],
+  ];
+  return (
+    <div className="grid grid-cols-3 gap-x-2 border-b border-[#1f242c] bg-[#0d1014] px-2 py-1 text-[10px] leading-[1.35] sm:grid-cols-4">
+      {cells.map(([k, v, title]) => (
+        <div key={k} className="truncate" title={title ?? `${k}: ${v}`}>
+          <span className="text-[#7d8590]">{k} </span>
+          <span className="text-[#d6dae0]">{v}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Technical mode: system-wide numbers above the tiles. */
+function SysBar({ diag, poll, tiles }: { diag?: Tech; poll?: PollStats; tiles: Array<{ agent: AgentRecord; usage?: AgentUsage }> }) {
+  const s = diag?.sys;
+  const now = Date.now();
+  const live = tiles.filter((t) => ["running", "starting", "reviewing"].includes(t.agent.status));
+  // Sum of running agents' latest turn speeds: the team's current output rate.
+  const teamTps = live.reduce((sum, t) => sum + (Number(t.usage?.lastTps ?? t.usage?.tps) || 0), 0);
+  const items: Array<[string, string, string?]> = [
+    ["PC", s?.heartbeatAt ? `beat ${ago(s.heartbeatAt, now)} ago (ttl ${s.heartbeatTtl}s)` : "offline"],
+    ["poll", poll ? `${poll.ms}ms, every ${(poll.delay / 1000).toFixed(1)}s, ${poll.events} new` : "—", "Wall refresh: round trip, interval, events in the last refresh"],
+    ["team tok/s", teamTps ? String(Math.round(teamTps)) : "—", "Sum of running agents' latest output speeds"],
+    ["running", `${live.length}/${tiles.length}`],
+    ["queue", String(s?.homeQueue ?? "?"), "Jobs waiting for the PC"],
+    ["inbox", String(s?.attention ?? "?")],
+    ["redis keys", s ? s.redisKeys.toLocaleString() : "?"],
+    [
+      "kaggle",
+      s?.kaggle.length ? s.kaggle.map((k) => `#${k.slot} ${k.accel} ${k.models[0] ?? ""} ${ago(k.startedAt, now)}`).join(" · ") : "none",
+      s?.kaggle.map((k) => `server ${k.slot} (${k.user ?? "?"}): ${k.models.join(", ")}, last seen ${ago(k.lastSeen, now)} ago`).join("\n"),
+    ],
+    [
+      "claude",
+      s?.limits.length ? s.limits.map((l) => `${l.type.replace("seven_day", "7d").replace("five_hour", "5h")} ${pct(l.utilization)}`).join(" · ") : "no data",
+      s?.limits.map((l) => `${l.type}: ${pct(l.utilization)} ${l.status ?? ""}${l.resetsAt ? `, resets ${new Date(l.resetsAt * 1000).toLocaleString()}` : ""}`).join("\n"),
+    ],
+  ];
+  return (
+    <div className="mb-2 flex flex-wrap gap-x-4 gap-y-0.5 rounded border border-[#1f242c] bg-[#0b0d10] px-2 py-1 font-mono text-[10px] text-[#d6dae0]">
+      {items.map(([k, v, title]) => (
+        <span key={k} title={title}>
+          <span className="text-[#7d8590]">{k} </span>
+          {v}
+        </span>
+      ))}
+    </div>
   );
 }
 
