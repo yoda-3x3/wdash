@@ -470,15 +470,36 @@ export class JobRunner implements AgentHost, TeamApi {
       }
       case "decide": {
         const p = this.pending.get(cmd.requestId);
-        if (!p || p.kind !== "permission") return;
+        if (!p || p.kind !== "permission") {
+          // Stale (the PC restarted since it was asked): close the card and say so instead of doing nothing.
+          const asked = await this.relay.getApproval(this.jobId, cmd.requestId);
+          if (asked?.status === "pending") {
+            await this.relay.putApproval({ ...asked, status: "expired", decidedAt: Date.now() });
+            await clear(this.relay, this.jobId, "permission", cmd.requestId);
+            await this.info(`That permission request had expired (the PC restarted). ${asked.agentId} will ask again if it still needs it.`);
+          }
+          return;
+        }
         if (cmd.allow && cmd.scope === "job" && p.rule) await this.relay.addAllowRule(this.jobId, p.rule);
         p.resolve({ allow: cmd.allow, message: cmd.message, scope: cmd.scope });
         return;
       }
       case "answer": {
         const p = this.pending.get(cmd.requestId);
-        if (!p || p.kind !== "question") return;
-        p.resolve({ allow: true, answers: cmd.answers });
+        if (p?.kind === "question") {
+          p.resolve({ allow: true, answers: cmd.answers });
+          return;
+        }
+        // The question is gone from this runner (the PC restarted, or it was answered in the chat first). Don't drop
+        // the user's answer: deliver it as a message and close the card.
+        const asked = await this.relay.getApproval(this.jobId, cmd.requestId);
+        if (!asked || asked.status === "answered") return;
+        await this.relay.putApproval({ ...asked, status: "answered", decidedAt: Date.now() });
+        await clear(this.relay, this.jobId, "question", cmd.requestId);
+        const text = Object.entries(cmd.answers)
+          .map(([q, a]) => `- ${q}\n  → ${a}`)
+          .join("\n");
+        await this.handleCommand({ type: "user_message", agentId: asked.agentId, text: `Answers to your earlier question(s):\n${text}` });
         return;
       }
       case "approve_plan": {

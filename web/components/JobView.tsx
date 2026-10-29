@@ -269,6 +269,10 @@ function QuestionCard({ jobId, q, onDone }: { jobId: string; q: Approval; onDone
   const questions = ((q.input.questions as Q[] | undefined) ?? []).filter((x) => x?.question);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  // Hidden once sent, so a slow refresh doesn't leave a card that looks like it ignored the click.
+  const [sent, setSent] = useState(false);
+  const answered = questions.filter((qq) => answers[qq.question]?.trim()).length;
+  if (sent) return <div className="card p-3 text-sm text-muted">Answer sent.</div>;
   const toggle = (qq: Q, label: string) =>
     setAnswers((a) => {
       if (!qq.multiSelect) return { ...a, [qq.question]: label };
@@ -303,11 +307,14 @@ function QuestionCard({ jobId, q, onDone }: { jobId: string; q: Approval; onDone
       ))}
       <button
         className="btn btn-primary"
-        disabled={busy || questions.some((qq) => !answers[qq.question])}
+        disabled={busy || answered === 0}
         onClick={async () => {
           setBusy(true);
           try {
-            await api(`/api/jobs/${jobId}/cmd`, { cmd: { type: "answer", requestId: q.requestId, answers } });
+            // Questions left blank still get an answer, so a long grilling round can be sent part-way.
+            const all = Object.fromEntries(questions.map((qq) => [qq.question, answers[qq.question]?.trim() || "(no answer: use your judgment)"]));
+            await api(`/api/jobs/${jobId}/cmd`, { cmd: { type: "answer", requestId: q.requestId, answers: all } });
+            setSent(true);
             onDone();
           } catch (e) {
             alert((e as Error).message);
@@ -316,7 +323,7 @@ function QuestionCard({ jobId, q, onDone }: { jobId: string; q: Approval; onDone
           }
         }}
       >
-        Send answer
+        {busy ? "Sending…" : questions.length > 1 ? `Send answers (${answered} of ${questions.length})` : "Send answer"}
       </button>
     </div>
   );
