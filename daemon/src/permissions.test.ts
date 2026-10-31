@@ -52,7 +52,7 @@ test("shell: configured and read-only commands allowed, others ask", () => {
 });
 
 test("network asks; board tools allowed; questions routed", () => {
-  assert.equal(decide("WebFetch", { url: "https://x.dev" }, ctx).kind, "ask");
+  assert.equal(decide("WebFetch", { url: "https://x.dev" }, ctx).kind, "allow");
   assert.equal(decide("mcp__wdash__board_post", {}, ctx).kind, "allow");
   assert.equal(decide("AskUserQuestion", {}, ctx).kind, "question");
   assert.equal(decide("CronCreate", {}, ctx).kind, "deny");

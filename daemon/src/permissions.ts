@@ -116,12 +116,8 @@ export function decide(tool: string, input: Record<string, unknown>, ctx: Policy
     return { kind: "ask", rule, title };
   }
 
-  if (NETWORK_TOOLS.has(tool)) {
-    const target = String(input.url ?? input.query ?? "");
-    const rule = `${tool}:${target}`;
-    if (ctx.jobRules.includes(`${tool}:*`) || ctx.jobRules.includes(rule)) return { kind: "allow" };
-    return { kind: "ask", rule: `${tool}:*`, title: `${tool}: ${target}` };
-  }
+  // Reading links and searching only read, and the user wants agents to follow the links they give.
+  if (NETWORK_TOOLS.has(tool)) return { kind: "allow" };
 
   // Unknown or third-party MCP tools: ask.
   const rule = `${tool}:*`;

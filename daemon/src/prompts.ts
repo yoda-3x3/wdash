@@ -17,6 +17,7 @@ Rules for everyone:
 - Files the user attaches (documents, specs, data, images) are in \`.wdash/attachments/\` in your working directory. Treat them as reference material: read them, don't edit them, and don't copy them into the project unless the task asks for it. That folder is git-ignored. Read handles text, PDFs, and images; for other formats (e.g. .docx, .xlsx), extract the text with a shell command.
 - To give the user a file (a report, document, image, export…), write it in your working directory and call share_file; it appears in their chat as a download. Use it when they ask for a file.
 - To change files in a different GitHub repo than this project, call open_repo (owner/name), edit in the folder it returns, then push_repo, which pushes straight to that repo's default branch.
+- Links the user gives (docs, references, datasets) can be read with WebFetch; use them.
 - Finished workers aren't gone: board_post to one wakes it (with its memory) in a worktree updated with the job branch; it then reports done again.
 - [conference] messages are a call with the whole team: answer the user briefly (it may be read aloud), then keep working.
 - Use AskUserQuestion only when you're truly blocked on a decision that only the user can make.
@@ -65,6 +66,13 @@ Workflow:
 6. If the user asked to deploy or publish the result, call vercel_deploy (it deploys the combined job branch) and include the URL in your report.
 7. Call job_finish with a concise report for the user: what changed, how it was verified, anything left to do.
 
+Planning for speed AND quality:
+- Split along the task's natural seams: one worker per independent area (separate files/modules), so nobody waits on anybody. Parallelize side work too (tests, docs, research, assets) as their own workers. Don't split tiny tasks: each worker adds review overhead.
+- Give every worker a crisp task with acceptance criteria and everything it needs (relevant cache entries, links, file paths), so it doesn't rediscover the repo.
+- Pick each agent's model with the plan item's model field: opus for hard design/architecture/tricky debugging, sonnet for normal code, haiku (or kaggle:<model>) for mechanical work (renames, boilerplate, simple tests, data shuffling). Use leads when an area needs 3+ workers.
+- UI/visual design (pages, layouts, styling, components, branding): FIRST grill the user with AskUserQuestion, 1-3 rounds (goal and audience, look and feel with references, must-haves, colors/fonts, devices), unless the task already answers all of it. Then mark those items ui: true; they always run on Opus. team_plan refuses ui items until the user has answered.
+- If the user gives links, read them with WebFetch before planning.
+
 Whenever the user asks what the job will cost or use (or how much is left), call usage_quote and answer with a short estimate: a range for API-equivalent $, tokens and time, the share of their 5-hour/weekly Claude limits, Kaggle hours if Kaggle models are used, and what drives it.
 
 Checks configured for this project: ${checksLine(project)}.
@@ -77,6 +85,7 @@ function orchestratorLite(job: JobRecord, project: ProjectConfig): string {
   return `${COMMON_LITE}${job.shape === "three-tier" ? "\n3-TIER job: every team_plan item must be a lead (lead: true) owning one area; leads split, review and merge their own workers, then report to you." : ""}
 # Role: ORCHESTRATOR (project ${project.name}, repo ${project.repo}). You never edit files.
 1. Look only at what you need to plan, call usage_quote, then team_plan. ${workers} Give workers non-overlapping path globs covering everything they edit. End the summary with "Estimate: ..." ($, time, share of Claude limits). If the user asks about cost or usage, call usage_quote and answer in 1-2 lines.
+   Split along independent areas for speed; set each item's model (opus hard, sonnet normal, haiku/kaggle mechanical). UI/design work: grill the user with AskUserQuestion first, then mark it ui: true (runs on Opus). Read any links the user gave with WebFetch.
 2. End your turn; you'll be messaged when workers report done or need you.
 3. On done: review_diff once. Approve unless something is actually wrong; then board_request_changes with short, specific notes (cap ${job.reviewCap} round(s)).
 4. When all are merged: job_final_check, vercel_deploy if the user asked to deploy, then job_finish with a 2-4 line report. Skip a second full review unless checks fail.
@@ -116,7 +125,7 @@ export function leadPrompt(job: JobRecord, project: ProjectConfig, rec: AgentRec
   if (job.lite)
     return `${COMMON_LITE}
 # Role: LEAD "${rec.id}" (project ${project.name}). Your area: ${rec.globs.join(", ")}. You never edit files.
-1. Look only at what you need, then team_spawn_worker for each piece (globs inside your area, no overlaps). Use as few workers as the area needs.
+1. Look only at what you need, then team_spawn_worker for each piece (globs inside your area, no overlaps). Use as few workers as the area needs; set model per worker; UI pieces ui: true.
 2. End your turn; you'll be messaged when they report done.
 3. review_diff once each; board_approve (merges into your branch ${rec.branch}) or board_request_changes (cap ${cap}).
 4. When all are merged: board_report_done with a 1-2 line summary; the orchestrator reviews your branch.
@@ -130,7 +139,7 @@ Your branch: ${rec.branch}. You never edit files yourself.
 
 Workflow:
 1. Explore your area enough to split it (Read/Grep/Glob).
-2. Call team_spawn_worker for each piece of work: a clear task with acceptance criteria and non-overlapping globs inside your area. Use as few workers as the area needs; split wide when pieces are independent.
+2. Call team_spawn_worker for each piece of work: a clear task with acceptance criteria and non-overlapping globs inside your area. Use as few workers as the area needs; split wide when pieces are independent. Set each worker's model (opus hard, sonnet normal, haiku/kaggle mechanical); UI/design pieces get ui: true (Opus, and the user must have been grilled; ask them with AskUserQuestion if nobody has).
 3. End your turn and wait. You'll be messaged when your workers report done, request files, or get stuck.
 4. When a worker reports done, call review_diff and review it critically: correctness, edge cases, tests, scope. Then board_approve (merges it into your branch) or board_request_changes with specific notes. The review cap is ${cap} rounds per worker.
 5. When all your workers are merged, call board_report_done with a short summary of the whole area. Checks run on your branch and the orchestrator reviews it. If it requests changes, spawn a worker (new name) or message an existing one to fix them, review and merge again, then report done again.
@@ -161,6 +170,7 @@ The user is often NOT watching live; your replies notify them, and they may answ
 - To change files in a different GitHub repo, call open_repo (owner/name), edit in the folder it returns, then push_repo (pushes straight to its default branch).
 - To deploy a site or app to Vercel, call vercel_deploy; it returns the live URL.
 - If the user asks what something will cost or use (or how much is left), call usage_quote and give a short estimate: API-equivalent $, time, and the share of their Claude limits.
+- Before UI/visual design work, grill the user with AskUserQuestion (goal and audience, look and feel with references, must-haves, colors/fonts, devices) unless they already said. Read links they give with WebFetch.
 - Messages starting with [user] come from the user; [wdash] comes from the system.
 - Keep replies concise; end each turn with what you did or what you need.${deployLine(project)}
 `;

@@ -5,6 +5,7 @@ import type { Redis } from "ioredis";
 import {
   ATTACHMENTS_DIR,
   CHAT_AGENT,
+  CacheEntry,
   MAX_WORKERS,
   NO_PROJECT,
   MAX_SHARE_BYTES,
@@ -175,6 +176,7 @@ export class JobRunner implements AgentHost, TeamApi {
       await clear(this.relay, this.jobId, "cloud_dispatch_failed");
 
       await this.prepareMain();
+      await this.refreshCacheNote().catch(() => undefined);
       const existing = await this.relay.getAgents(this.jobId);
       // Kaggle servers for the agents about to run come up first (in parallel). Workers' and leads' servers start
       // warming now too, so they're likely ready by the time the plan is approved.
@@ -359,12 +361,36 @@ export class JobRunner implements AgentHost, TeamApi {
     if (isKaggleModel(model)) await ensureKaggleFor(this.relay, kaggleModelName(model), (text) => this.info(text));
   }
 
+  /** Index of worker-cache entries for this project (and "all"), appended to every agent's instructions. */
+  private cacheNote = "";
+
+  private async refreshCacheNote(): Promise<void> {
+    const entries = Object.values(await this.relay.r.hgetall(K.workerCache))
+      .map((v) => CacheEntry.safeParse(JSON.parse(v)))
+      .filter((p) => p.success)
+      .map((p) => p.data!)
+      .filter((e) => e.scope === "all" || e.scope === this.project.name)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    if (!entries.length) {
+      this.cacheNote = "\n\n# Worker cache\nEmpty so far. When you learn something reusable (build quirks, where things live, how to drive a tool), save it with cache_write.";
+      return;
+    }
+    // A short index keeps every turn cheap; full entries come from cache_read.
+    let index = "";
+    for (const e of entries) {
+      const line = `- ${e.id}: ${e.title}${e.body ? ` — ${e.body.replace(/\s+/g, " ").slice(0, 140)}` : ""}${e.links.length ? ` (${e.links.length} link${e.links.length === 1 ? "" : "s"})` : ""}\n`;
+      if (index.length + line.length > 3500) break;
+      index += line;
+    }
+    this.cacheNote = `\n\n# Worker cache\nShared notes from earlier work. Read the relevant ones with cache_read BEFORE exploring, to save time and tokens. Save new reusable findings with cache_write.\n${index}`;
+  }
+
   private makeRunner(rec: AgentRecord, cwd: string, systemAppend: string): AgentRunner {
     const refs = this.job.refRepos ? this.job.refRepos.split(",").filter(Boolean) : [];
     const refNote = refs.length
       ? `\n\n# Reference repos\nThe user pointed this job at these GitHub repos for reference: ${refs.join(", ")}. Read them with open_repo when they help; don't push to them unless the task says so.`
       : "";
-    const runner = new AgentRunner(this, rec, { cwd, systemAppend: systemAppend + refNote, env: this.agentEnv, lite: this.job.lite });
+    const runner = new AgentRunner(this, rec, { cwd, systemAppend: systemAppend + refNote + this.cacheNote, env: this.agentEnv, lite: this.job.lite });
     this.agents.set(rec.id, runner);
     return runner;
   }
@@ -801,6 +827,20 @@ export class JobRunner implements AgentHost, TeamApi {
     }
   }
 
+  /**
+   * UI/visual design work starts only after the user has been grilled: the orchestrator (or a lead) must have had at
+   * least one AskUserQuestion answered in this job. Checked from the stored approvals, so it survives restarts.
+   */
+  private async requireGrillForUi(workers: PlannedWorker[]): Promise<void> {
+    if (!workers.some((w) => w.ui)) return;
+    const approvals = Object.values(await this.relay.r.hgetall(K.approvals(this.jobId))).map((v) => JSON.parse(v) as Approval);
+    const grilled = approvals.some((a) => a.kind === "question" && a.status === "answered" && (a.agentId === ORCH || this.agents.get(a.agentId)?.rec.role === "lead"));
+    if (!grilled)
+      throw new Error(
+        "This plan has UI/design work (ui: true). Grill the user first: ask about goal and audience, look and feel (references), must-haves, colors/fonts and devices with AskUserQuestion, then submit the plan again.",
+      );
+  }
+
   async submitPlan(summary: string, workers: PlannedWorker[]): Promise<string> {
     const fixed = this.job.workers === "auto" ? undefined : Number(this.job.workers);
     if (fixed && workers.length !== fixed) throw new Error(`The user asked for exactly ${fixed} worker(s); your plan has ${workers.length}.`);
@@ -811,6 +851,7 @@ export class JobRunner implements AgentHost, TeamApi {
       if (names.has(w.name) || w.name === ORCH || w.name === "main" || this.agents.has(w.name)) throw new Error(`Duplicate or reserved worker name: ${w.name}`);
       names.add(w.name);
     }
+    await this.requireGrillForUi(workers);
     for (let i = 0; i < workers.length; i++)
       for (let j = i + 1; j < workers.length; j++)
         for (const a of workers[i]!.globs)
@@ -821,7 +862,8 @@ export class JobRunner implements AgentHost, TeamApi {
     if (workers.length >= 3) {
       this.pendingPlan = { summary, workers };
       await this.relay.setStatus(this.jobId, "awaiting_plan_approval");
-      const detail = `${summary}\n\n${workers.map((w) => `• ${w.name}${w.lead ? " (lead)" : ""} — ${w.globs.join(", ")}`).join("\n")}`;
+      const model = (w: PlannedWorker) => (w.ui ? " [UI, opus]" : w.model ? ` [${w.model}]` : "");
+      const detail = `${summary}\n\n${workers.map((w) => `• ${w.name}${w.lead ? " (lead)" : ""}${model(w)} — ${w.globs.join(", ")}`).join("\n")}`;
       await this.notify("plan_approval", { agentId: this.lead, detail: truncate(detail, 800) });
       return "Plan submitted. It has 3+ workers, so it waits for the user's approval. End your turn now; you'll get a message when it's approved or edited.";
     }
@@ -865,8 +907,11 @@ export class JobRunner implements AgentHost, TeamApi {
     const cwd = await G.addWorktree(this.repoDir, this.wtPath(w.name), branch, base);
     await this.syncAttachments(cwd);
     const role = w.lead ? "lead" : "worker";
-    const model = this.roleModel(role);
+    // UI/design work always runs on Opus; otherwise the planner's pick, else the job's model for the tier.
+    if (w.ui) await this.requireGrillForUi([w]);
+    const model = w.ui ? "opus" : w.model || this.roleModel(role);
     await this.ensureModel(model);
+    await this.refreshCacheNote();
     const rec: AgentRecord = {
       id: w.name,
       role,
@@ -1346,6 +1391,20 @@ export class JobRunner implements AgentHost, TeamApi {
     const out = await pushRepo(a.cwd, repo, message);
     await this.relay.emit({ jobId: this.jobId, agentId: fromId, type: "info", payload: { text: out } });
     return out;
+  }
+
+  async cacheRead(id: string): Promise<string> {
+    const raw = await this.relay.r.hget(K.workerCache, id);
+    if (!raw) throw new Error(`No worker-cache entry "${id}".`);
+    const e = CacheEntry.parse(JSON.parse(raw));
+    return `# ${e.title}\n(scope ${e.scope}, by ${e.by}, updated ${new Date(e.updatedAt).toLocaleString()})\n\n${e.body}${e.links.length ? `\n\nLinks (read with WebFetch):\n${e.links.map((l) => `- ${l}`).join("\n")}` : ""}`;
+  }
+
+  async cacheWrite(fromId: string, entry: { id: string; title: string; body: string; scope?: string; links?: string[] }): Promise<string> {
+    const e = CacheEntry.parse({ ...entry, scope: entry.scope || "all", links: entry.links ?? [], updatedAt: Date.now(), by: `${this.jobId}/${fromId}` });
+    await this.relay.r.hset(K.workerCache, e.id, JSON.stringify(e));
+    await this.info(`${fromId} saved "${e.title}" to the worker cache.`);
+    return `Saved worker-cache entry ${e.id}.`;
   }
 
   /** Facts for a usage estimate (usage_quote tool): this job so far, past jobs, Claude limits, Kaggle hours. */

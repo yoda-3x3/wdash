@@ -255,7 +255,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
         <span>
           <span className="font-medium">🪶 Low usage mode</span>
           <span className="block text-xs text-muted">
-            Uses as few tokens as possible: a minimal tool set (no subagents or web tools), low effort, short prompts{chat ? "" : ", one worker unless the task really splits, and one review round"}. Best for small, well-defined tasks.
+            Uses as few tokens as possible: a minimal tool set (no subagents or web search; links still work), low effort, short prompts{chat ? "" : ", one worker unless the task really splits, and one review round"}. Best for small, well-defined tasks.
           </span>
         </span>
       </label>

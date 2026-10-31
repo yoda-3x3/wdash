@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { MoodPicker } from "./MoodPicker";
 import { signOut } from "next-auth/react";
 import { useEffect, useState } from "react";
@@ -8,6 +9,24 @@ import { api, timeAgo, usePoll } from "@/lib/client";
 import { setTechMode, useTechMode } from "@/lib/tech";
 import { useBoard } from "./Shell";
 import { Usage } from "./Usage";
+
+/** Settings heading with its sub-tabs. */
+export function SettingsTabs({ active }: { active: "general" | "cache" }) {
+  const tab = (id: typeof active, href: string, label: string) => (
+    <Link href={href} className={`rounded-md px-3 py-1 ${active === id ? "bg-panel-2 font-medium" : "text-muted"}`}>
+      {label}
+    </Link>
+  );
+  return (
+    <div className="flex items-center gap-3">
+      <h1 className="text-lg font-semibold">Settings</h1>
+      <div className="ml-auto flex rounded-lg border border-line p-0.5 text-sm">
+        {tab("general", "/settings", "General")}
+        {tab("cache", "/settings/cache", "Worker cache")}
+      </div>
+    </div>
+  );
+}
 
 function b64ToUint8(b64: string): Uint8Array<ArrayBuffer> {
   const pad = "=".repeat((4 - (b64.length % 4)) % 4);
@@ -61,7 +80,7 @@ export function Settings({ login, vapidKey }: { login: string; vapidKey: string 
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
-      <h1 className="text-lg font-semibold">Settings</h1>
+      <SettingsTabs active="general" />
 
       <section className="card space-y-3 p-4">
         <h2 className="font-medium">Mood</h2>

@@ -8,7 +8,7 @@ import { MAX_WORKERS } from "@wdash/shared";
  * `helps`: a slow worker this one takes part of the work from (its globs may overlap that worker's).
  * `lead`: a middle-tier agent (orchestrator plans only) that splits its globs among its own workers.
  */
-export type PlannedWorker = { name: string; task: string; globs: string[]; helps?: string; lead?: boolean };
+export type PlannedWorker = { name: string; task: string; globs: string[]; helps?: string; lead?: boolean; model?: string; ui?: boolean };
 
 /** Operations the board tools call. Implemented by JobRunner; each returns text for the model. */
 export interface TeamApi {
@@ -19,6 +19,8 @@ export interface TeamApi {
   pushRepo(fromId: string, repo: string, message: string): Promise<string>;
   vercelDeploy(fromId: string, path: string, project: string | undefined, production: boolean): Promise<string>;
   usageQuote(): Promise<string>;
+  cacheRead(id: string): Promise<string>;
+  cacheWrite(fromId: string, entry: { id: string; title: string; body: string; scope?: string; links?: string[] }): Promise<string>;
   // orchestrator, and leads for their own workers (`by`: who is acting; defaults to the orchestrator)
   submitPlan(summary: string, workers: PlannedWorker[]): Promise<string>;
   spawnWorker(w: PlannedWorker, by?: string): Promise<string>;
@@ -57,6 +59,30 @@ function shareTool(api: TeamApi, selfId: string) {
     },
     (a) => wrap(() => api.shareFile(selfId, a.path, a.note)),
   );
+}
+
+/** The worker cache (Settings > Worker cache): shared notes that save agents from rediscovering things. */
+function cacheTools(api: TeamApi, selfId: string) {
+  return [
+    tool(
+      "cache_read",
+      "Read one worker-cache entry in full (its notes and links). The index of entries is in your instructions; read the relevant ones before exploring.",
+      { id: z.string().describe("Entry id from the index") },
+      (a) => wrap(() => api.cacheRead(a.id)),
+    ),
+    tool(
+      "cache_write",
+      "Save or update a worker-cache entry so later agents (any model, any job) can skip rediscovering it: build/test quirks, where things live, how to drive a tool, useful links. Short and factual; no secrets. Reusing an id replaces that entry.",
+      {
+        id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,47}$/).describe("Short id, e.g. 'day-tradr-build' or 'blender-camera'"),
+        title: z.string().min(1).max(120),
+        body: z.string().min(1).max(8000).describe("The notes (markdown)"),
+        scope: z.string().optional().describe("'all' (default) or a project name"),
+        links: z.array(z.string().url()).max(20).optional(),
+      },
+      (a) => wrap(() => api.cacheWrite(selfId, a)),
+    ),
+  ];
 }
 
 /** Numbers for estimating what a job will use, so the agent can give the user a quote. */
@@ -115,6 +141,12 @@ const workerShape = z.object({
     .string()
     .optional()
     .describe("Only when splitting a slow worker's work: that worker's name. The helper may take a subset of its paths."),
+  model: z
+    .string()
+    .regex(/^(opus|sonnet|haiku|kaggle:[\w.:/-]+)$/)
+    .optional()
+    .describe("Model for this agent: opus (hard design/architecture), sonnet (normal code), haiku or kaggle:<model> (mechanical work). Default: the job's model for its tier."),
+  ui: z.boolean().optional().describe("true for UI/visual design work (pages, layouts, styling, components). Always runs on Opus; the user must have been grilled first."),
 });
 /** The orchestrator's plan items may be leads (3-tier); a lead's own workers may not. */
 const planItemShape = workerShape.extend({
@@ -134,6 +166,7 @@ export function orchestratorServer(api: TeamApi, selfId: string): McpSdkServerCo
       shareTool(api, selfId),
       deployTool(api, selfId),
       quoteTool(api),
+      ...cacheTools(api, selfId),
       tool(
         "team_plan",
         `Submit the plan: split the task across 1-${MAX_WORKERS} workers (or leads, lead: true), each owning non-overlapping path globs. Plans with 3+ items wait for the user's approval; smaller plans start immediately.`,
@@ -188,6 +221,7 @@ export function leadServer(api: TeamApi, selfId: string): McpSdkServerConfigWith
     tools: [
       shareTool(api, selfId),
       quoteTool(api),
+      ...cacheTools(api, selfId),
       tool(
         "team_spawn_worker",
         "Start one of YOUR workers. Its globs must be inside your own area and not overlap your other workers'. Its branch starts from yours.",
@@ -239,7 +273,7 @@ export function leadServer(api: TeamApi, selfId: string): McpSdkServerConfigWith
 
 /** Chat agents work alone: no board tools, just sharing files. */
 export function chatServer(api: TeamApi, selfId: string): McpSdkServerConfigWithInstance {
-  return createSdkMcpServer({ name: "wdash", version: "0.1.0", tools: [shareTool(api, selfId), ...repoTools(api, selfId), deployTool(api, selfId), quoteTool(api)] });
+  return createSdkMcpServer({ name: "wdash", version: "0.1.0", tools: [shareTool(api, selfId), ...repoTools(api, selfId), deployTool(api, selfId), quoteTool(api), ...cacheTools(api, selfId)] });
 }
 
 export function workerServer(api: TeamApi, selfId: string): McpSdkServerConfigWithInstance {
@@ -249,6 +283,7 @@ export function workerServer(api: TeamApi, selfId: string): McpSdkServerConfigWi
     tools: [
       shareTool(api, selfId),
       ...repoTools(api, selfId),
+      ...cacheTools(api, selfId),
       tool(
         "board_post",
         "Send a message to whoever reviews you (the orchestrator, or your lead), another worker (by name) or 'all'.",

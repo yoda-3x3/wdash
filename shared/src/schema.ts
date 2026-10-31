@@ -100,6 +100,24 @@ export const KAGGLE_MODELS: Array<{ id: string; label: string }> = [
   { id: "gpt-oss:20b", label: "gpt-oss 20B (fastest)" },
   { id: "qwen3-coder:30b", label: "Qwen3 Coder 30B (tool calls unreliable)" },
 ];
+/**
+ * Worker cache: shared, reusable notes (how a project builds, where things live, how to drive a tool like Blender,
+ * links worth reading). Every agent gets the index at start and reads entries with cache_read, so it doesn't spend
+ * tokens rediscovering them; agents add what they learn with cache_write. `scope`: "all" or a project name.
+ */
+export const CacheEntry = z.object({
+  id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,47}$/, "lowercase letters, numbers and dashes"),
+  title: z.string().min(1).max(120),
+  body: z.string().max(20_000).default(""),
+  scope: z.string().max(100).default("all"),
+  links: z.array(z.string().url().max(500)).max(20).default([]),
+  updatedAt: z.number().default(0),
+  /** "you" or the agent that wrote it ("jobid/agent"). */
+  by: z.string().max(80).default("you"),
+});
+export type CacheEntry = z.infer<typeof CacheEntry>;
+export const CacheEntryInput = CacheEntry.omit({ updatedAt: true, by: true });
+
 /** One finished Kaggle server session (start = notebook pushed, end = last seen alive). */
 export type KaggleSession = { user: string; slot: number; start: number; end: number; accel?: KaggleAccel };
 /** Kaggle's free GPU allowance per account per week (TPU has its own 20 h). */
@@ -223,7 +241,7 @@ export const JobRecord = z.object({
 export type JobRecord = z.infer<typeof JobRecord>;
 
 /** Built-in tools agents get in low usage mode. Every tool definition is resent each turn, and subagents multiply usage. */
-export const LITE_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "AskUserQuestion"];
+export const LITE_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "AskUserQuestion", "WebFetch"];
 /** Low usage mode caps the project CLAUDE.md appended to each agent's system prompt at this many characters. */
 export const LITE_NOTES_CHARS = 3000;
 
