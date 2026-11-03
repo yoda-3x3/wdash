@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import type { ProjectConfig } from "@wdash/shared";
 import { api, timeAgo, usePoll } from "@/lib/client";
 import { setTechMode, useTechMode } from "@/lib/tech";
+import { WALL_STYLES, setWallStyle, useWallStyle, type WallStyle } from "@/lib/wallStyle";
 import { useBoard } from "./Shell";
 import { Usage } from "./Usage";
 
@@ -42,6 +43,7 @@ export function Settings({ login, vapidKey }: { login: string; vapidKey: string 
   const [push, setPush] = useState<"unsupported" | "off" | "on" | "denied" | "loading">("loading");
   const [msg, setMsg] = useState<string>();
   const tech = useTechMode();
+  const wallStyle = useWallStyle();
 
   useEffect(() => {
     (async () => {
@@ -113,6 +115,23 @@ export function Settings({ login, vapidKey }: { login: string; vapidKey: string 
         <p className="text-sm">
           {!state ? <span className="text-muted">…</span> : state.home.online ? <span className="text-ok">Online</span> : <span className="text-muted">Offline</span>}
           {state?.home.lastSeen && <span className="text-muted"> · heartbeat {timeAgo(state.home.lastSeen)}</span>}
+        </p>
+      </section>
+
+      <section className="card space-y-2 p-4">
+        <h2 className="font-medium">Wall style</h2>
+        <div className="flex flex-wrap gap-2">
+          {(Object.keys(WALL_STYLES) as WallStyle[]).map((s) => (
+            <button key={s} className={`btn ${wallStyle === s ? "btn-primary" : ""}`} onClick={() => setWallStyle(s)}>
+              {s === "office" ? "🏢 " : s === "kitchen" ? "🍳 " : "⌨️ "}
+              {WALL_STYLES[s]}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-muted">
+          Office and Kitchen turn the Wall into an arcade scene: each job is a room, the orchestrator is the boss (head chef), leads are managers (sous chefs), workers
+          sit at desks (stations). They type or cook while working, take a break when idle, wave a ❗ when they need you, smoke when something fails. The badge is
+          the model (O Opus, S Sonnet, H Haiku, 🤖 Kaggle). Saved on this device.
         </p>
       </section>
 

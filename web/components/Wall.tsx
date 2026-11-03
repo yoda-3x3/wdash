@@ -6,6 +6,8 @@ import type { AgentRecord, Attention, AttentionAction, JobRecord, WdEvent } from
 import { projectLabel } from "@wdash/shared";
 import { api, usd } from "@/lib/client";
 import { setTechMode, useTechMode } from "@/lib/tech";
+import { WALL_STYLES, setWallStyle, useWallStyle, type WallStyle } from "@/lib/wallStyle";
+import { ArcadeScene } from "./Arcade";
 import { useBoard } from "./Shell";
 
 // The wall: every agent across every live job as a terminal tile streaming its output.
@@ -78,6 +80,7 @@ export function Wall() {
   const [loaded, setLoaded] = useState(false);
   const wallRef = useRef<HTMLDivElement>(null);
   const tech = useTechMode();
+  const wallStyle = useWallStyle();
   const techRef = useRef(tech);
   techRef.current = tech;
   const [diag, setDiag] = useState<Tech>();
@@ -177,6 +180,18 @@ export function Wall() {
           <label className="flex items-center gap-1">
             <input type="checkbox" checked={hideDone} onChange={(e) => setHideDone(e.target.checked)} /> hide finished
           </label>
+          <select
+            value={wallStyle}
+            onChange={(e) => setWallStyle(e.target.value as WallStyle)}
+            className="rounded border border-[#2a2f39] bg-[#0d1014] px-1.5 py-0.5 text-[#d6dae0]"
+            title="Wall style (also in Settings)"
+          >
+            {(Object.keys(WALL_STYLES) as WallStyle[]).map((s) => (
+              <option key={s} value={s}>
+                {WALL_STYLES[s].toLowerCase()}
+              </option>
+            ))}
+          </select>
           <label className="flex items-center gap-1" title="Technical mode: every diagnostic (also in Settings)">
             <input type="checkbox" checked={tech} onChange={(e) => setTechMode(e.target.checked)} /> tech
           </label>
@@ -207,6 +222,18 @@ export function Wall() {
         <div className="p-8 text-center font-mono text-sm text-[#7d8590]">
           no live agents. type a task in the box above to start one.
         </div>
+      ) : wallStyle !== "terminal" ? (
+        <ArcadeScene
+          theme={wallStyle}
+          tiles={tiles.map((t, i) => ({
+            key: t.key,
+            job: t.job,
+            agent: t.agent,
+            n: i < 5 ? i + 1 : undefined,
+            needsYou: attentionByTile.has(t.key),
+            say: [...(lines[t.key] ?? [])].reverse().find((l) => l.tone === "fg" || l.tone === "tool")?.text,
+          }))}
+        />
       ) : (
         <div className="grid gap-1.5 sm:gap-2" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${dims.min}px), 1fr))` }}>
           {tiles.map((t, i) => (
