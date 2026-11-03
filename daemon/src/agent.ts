@@ -30,6 +30,8 @@ export interface AgentHost {
   onAgentError(agent: AgentRunner, kind: "usage_limit" | "error", detail: string): Promise<void>;
   onRateLimit(info: Record<string, unknown>): Promise<void>;
   mcpServer(agent: AgentRunner): McpSdkServerConfigWithInstance;
+  /** True while the job is paused or over budget: no new turns start until the user resumes. */
+  holding(): boolean;
 }
 
 export type AgentOptions = {
@@ -81,6 +83,11 @@ export class AgentRunner {
     await this.host.relay.putAgent(this.host.jobId, this.rec);
   }
 
+  /** False for an agent restored while its job was paused, until the user resumes it. */
+  get started(): boolean {
+    return !!this.loop;
+  }
+
   /** Start (or resume, if rec.sessionId is set) the session. */
   start(firstPrompt?: string): void {
     if (this.loop) return;
@@ -91,10 +98,32 @@ export class AgentRunner {
     });
   }
 
+  /** Messages kept back while the job is paused or over budget; release() delivers them. */
+  private held: SDKUserMessage[] = [];
+
   /** Queue a user turn. If the agent is mid-turn the SDK delivers it after the current step. */
   send(text: string): void {
+    const msg: SDKUserMessage = { type: "user", message: { role: "user", content: text }, parent_tool_use_id: null };
+    if (this.host.holding()) {
+      this.held.push(msg);
+      return;
+    }
     this.busy = true;
-    this.inbox.push({ type: "user", message: { role: "user", content: text }, parent_tool_use_id: null });
+    this.inbox.push(msg);
+  }
+
+  /** Pause: stop the current turn and take back messages that would start the next ones. */
+  async hold(): Promise<void> {
+    this.held.push(...this.inbox.drain());
+    await this.interrupt();
+  }
+
+  /** Resume: deliver what was held. Returns whether there was anything. */
+  release(): boolean {
+    const msgs = this.held.splice(0);
+    for (const m of msgs) this.inbox.push(m);
+    if (msgs.length) this.busy = true;
+    return msgs.length > 0;
   }
 
   async interrupt(): Promise<void> {

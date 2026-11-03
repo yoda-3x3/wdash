@@ -205,9 +205,32 @@ const routes = new Map<string, KaggleServer>();
 /** Launches in flight, by slot, so jobs asking at once share them. */
 const launching = new Map<number, { models: string[]; p: Promise<KaggleServer> }>();
 
+/**
+ * A slot's notebook may already be running or booting without us knowing (the daemon restarted mid-boot). Pushing
+ * again would start a second GPU session (Kaggle allows 2), so reconnect instead: the notebook's own source holds its
+ * key and ntfy topic, and the topic keeps the announcements (ntfy caches 12 h).
+ */
+async function adoptRunning(relay: Relay, slot: number, log: Log): Promise<KaggleServer | undefined> {
+  const st = await kernelStatus(slot).catch(() => undefined);
+  if (!st?.status || !/running|queued/i.test(st.status)) return undefined;
+  const a = account(slot);
+  const pulled = await api<{ blob?: { source?: string } }>(slot, `/kernels/pull?userName=${encodeURIComponent(a.user)}&kernelSlug=${slugFor(slot)}`).catch(() => undefined);
+  const m = pulled?.blob?.source?.match(/CONFIG = json\.loads\(r'''(.*?)'''\)/s);
+  if (!m) return undefined;
+  const conf = JSON.parse(m[1]!) as { key: string; topic: string; models: string[]; accel?: KaggleAccel };
+  await log(`Kaggle server ${slot} is already ${st.status.toLowerCase()} on Kaggle; reconnecting to it instead of starting another.`);
+  const accel = conf.accel ?? "gpu";
+  const since = Math.floor(Date.now() / 1000) - 12 * 3600;
+  const s = { ...(await waitReady(slot, conf.topic, since, conf.key, log, accel === "tpu" ? 70 * 60_000 : BOOT_TIMEOUT_MS)), accel, startedAt: Date.now() };
+  await save(relay, s);
+  return s;
+}
+
 function boot(relay: Relay, slot: number, models: string[], log: Log): Promise<KaggleServer> {
   const accel = kaggleAccelFor(models[0]!);
   const p = (async () => {
+    const adopted = await adoptRunning(relay, slot, log).catch(() => undefined);
+    if (adopted) return adopted;
     await log(`Starting Kaggle ${accel.toUpperCase()} server ${slot} for ${models.join(", ")} (first boot takes ~5-15 min${accel === "tpu" ? ", longer on TPU" : ""})...`);
     const { topic, key, since } = await launch(slot, models, accel);
     const s = { ...(await waitReady(slot, topic, since, key, log, accel === "tpu" ? 70 * 60_000 : BOOT_TIMEOUT_MS)), accel };
@@ -233,6 +256,13 @@ export async function ensureKaggleFor(relay: Relay, model = defaultKaggleModel()
     const used = new Set([...live.map((x) => x.slot), ...launching.keys()]);
     const free = Array.from({ length: cfg().maxServers }, (_, i) => i + 1).find((n) => !used.has(n));
     if (free) s = await boot(relay, free, bootModels, log);
+    // An adopted notebook may be serving a different model: add this one if it's a GPU (Ollama) server.
+    if (s && !s.models.includes(model)) {
+      if ((s.accel ?? "gpu") !== "gpu" || kaggleAccelFor(model) !== "gpu") throw new Error(`Kaggle server ${s.slot} serves ${s.models.join(", ")}, not ${model}; stop it to start one for ${model}.`);
+      await ensureKaggleModel(s, model, log);
+      s = { ...s, models: [...s.models, model] };
+      await save(relay, s);
+    }
   }
   if (!s) {
     // No free slot: download the model onto a running Ollama (GPU) server. A TPU model needs its own server.

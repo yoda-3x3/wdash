@@ -11,6 +11,11 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
     else this.items.push(item);
   }
 
+  /** Take back everything not yet consumed (used to hold messages while a job is paused). */
+  drain(): T[] {
+    return this.items.splice(0);
+  }
+
   close(): void {
     this.closed = true;
     for (const w of this.waiters.splice(0)) w({ value: undefined as never, done: true });

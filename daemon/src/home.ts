@@ -59,10 +59,13 @@ export async function runHome(): Promise<void> {
     running.set(jobId, p);
   };
 
-  // Jobs that were running here before a restart and haven't been migrated yet.
+  // Jobs that were running here before a restart and haven't been migrated yet. That includes jobs the website parked
+  // as "queued" while the PC was offline ("will continue when the PC is back"): they're mid-run (not status queued,
+  // which sits in the home queue instead), so nothing else would pick them up.
   for (const id of await relay.r.zrevrange(K.jobs, 0, 200)) {
     const job = await relay.getJob(id);
-    if (!job || TERMINAL_STATUSES.includes(job.status) || job.location !== "home") continue;
+    const parked = job?.location === "queued" && job.status !== "queued";
+    if (!job || TERMINAL_STATUSES.includes(job.status) || (job.location !== "home" && !parked)) continue;
     const lease = await relay.r.get(K.lease(id));
     if (!lease || lease === HOLDER) await startJob(id);
   }

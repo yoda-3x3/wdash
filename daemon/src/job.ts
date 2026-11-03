@@ -288,6 +288,7 @@ export class JobRunner implements AgentHost, TeamApi {
 
   private async resumeAgents(recs: AgentRecord[]): Promise<void> {
     const where = this.mode === "cloud" ? "a cloud runner (the home PC went offline)" : "the home PC";
+    const hold = !this.job.reopened && (this.job.status === "paused" || this.job.status === "over_budget");
     for (const rec of recs) {
       // Stops raised by the previous runner no longer apply; new ones are raised if they recur.
       await clear(this.relay, this.jobId, "agent_error", rec.id);
@@ -319,6 +320,8 @@ export class JobRunner implements AgentHost, TeamApi {
             : `[wdash] This job had finished and its work is merged. The user reopened it with a follow-up (next message). ` +
                 `Answer it; for more changes, spawn new workers (new names) as usual, then job_final_check and job_finish again.`,
         );
+      } else if (hold) {
+        // Paused or over budget before the restart: don't start it; "resume" starts it with the resume message.
       } else {
         runner.start(
           `[wdash] This job was resumed on ${where} from the last checkpoint (${this.job.lastCheckpointSha ?? "start"}). ` +
@@ -339,6 +342,7 @@ export class JobRunner implements AgentHost, TeamApi {
         await clear(this.relay, this.jobId, a.kind === "question" ? "question" : "permission", a.requestId);
       }
     }
+    if (hold) return; // stays paused / over budget
     const status = this.job.status === "awaiting_plan_approval" ? "awaiting_plan_approval" : "running";
     await this.relay.setStatus(this.jobId, status);
   }
@@ -489,7 +493,9 @@ export class JobRunner implements AgentHost, TeamApi {
           const names = await this.deliverAttachments(cmd.attachments);
           if (names.length) note = `\n\n[wdash] The user attached: ${names.join(", ")} (in ${ATTACHMENTS_DIR}/ in every agent's working directory).`;
         }
-        target.send(`[user] ${cmd.text}${note}`);
+        // Restored while the job was paused and never started: the user's message starts it.
+        if (target.started) target.send(`[user] ${cmd.text}${note}`);
+        else target.start(`[user] ${cmd.text}${note}`);
         // Show it as working right away, not only once its first reply streams in.
         if (target.rec.status === "idle") await target.setStatus("running");
         return;
@@ -560,16 +566,22 @@ export class JobRunner implements AgentHost, TeamApi {
         return;
       }
       case "pause": {
-        await Promise.all([...this.agents.values()].map((a) => a.interrupt()));
+        // Status first, so messages sent from here on are held too; then take back what was already queued.
+        this.job.status = "paused";
         await this.relay.setStatus(this.jobId, "paused");
+        await Promise.all([...this.agents.values()].map((a) => a.hold()));
         return;
       }
       case "resume": {
         await clear(this.relay, this.jobId, "usage_limit");
+        this.job.status = "running";
         await this.relay.setStatus(this.jobId, "running");
         for (const a of this.agents.values()) {
+          // Messages held while paused (board posts, nudges) go out now and carry on the work.
+          if (a.release()) continue;
           if (["failed", "stopped", "idle", "running"].includes(a.rec.status) && !(isTeamMember(a.rec.role) && this.workers.get(a.id)?.approved)) {
             if (a.rec.status === "failed") await this.ensureModel(a.rec.model).then(() => a.restart("[wdash] Resuming after an error. Check where you were and continue."));
+            else if (!a.started) await this.ensureModel(a.rec.model).then(() => a.start("[wdash] The user resumed the job (the PC restarted while it was paused). Check git status, then continue where you left off."));
             else a.send("[wdash] The user resumed the job. Continue where you left off.");
           }
         }
@@ -872,7 +884,7 @@ export class JobRunner implements AgentHost, TeamApi {
   }
 
   private async launchPlan(workers: PlannedWorker[]): Promise<void> {
-    await this.relay.setStatus(this.jobId, "running");
+    if (!this.holding()) await this.relay.setStatus(this.jobId, "running");
     for (const w of workers) await this.spawnWorker(w);
   }
 
@@ -1091,14 +1103,14 @@ export class JobRunner implements AgentHost, TeamApi {
   }
 
   async finalCheck(): Promise<string> {
-    await this.relay.setStatus(this.jobId, "reviewing");
+    if (!this.holding()) await this.relay.setStatus(this.jobId, "reviewing");
     const results = await runChecks(this.project, this.mainWt, this.stateDir);
     const sha = await G.head(this.mainWt);
     this.finalChecks = { sha, results };
     await this.emitChecks(this.lead, results, "final");
     const d = await G.diffAgainst(this.mainWt, await G.baseRef(this.repoDir, this.project.baseBranch, this.mode));
     await this.relay.emit({ jobId: this.jobId, agentId: this.lead, type: "diff", payload: { branch: branchFor.main(this.jobId), files: d.files, stat: d.stat, patch: d.patch, combined: true } });
-    await this.relay.setStatus(this.jobId, "running");
+    if (!this.holding()) await this.relay.setStatus(this.jobId, "running");
     return `Final checks at ${sha.slice(0, 8)}: ${checksSummary(results)}\n\nCombined diff:\n${d.stat}\n\n${truncate(d.patch, this.job.lite ? 20_000 : 60_000)}`;
   }
 
@@ -1252,13 +1264,18 @@ export class JobRunner implements AgentHost, TeamApi {
     await this.relay.emit({ jobId: this.jobId, agentId: agent.id, type: "usage", payload: { agent: agent.id, costUsd: agent.rec.costUsd, jobCostUsd: total } });
   }
 
+  /** Paused or over budget: agents hold new messages instead of starting turns (AgentHost). */
+  holding(): boolean {
+    return this.job.status === "paused" || this.job.status === "over_budget";
+  }
+
   /** Returns true if the job was stopped for budget. */
   private async checkBudget(): Promise<boolean> {
     const { costUsd, budgetUsd } = this.job;
     if (costUsd >= budgetUsd && this.job.status !== "over_budget") {
-      await Promise.all([...this.agents.values()].map((a) => a.interrupt()));
       this.job.status = "over_budget";
       await this.relay.setStatus(this.jobId, "over_budget");
+      await Promise.all([...this.agents.values()].map((a) => a.hold()));
       await this.checkpoint("budget");
       await this.notify("over_budget", { detail: `Spent ~$${costUsd.toFixed(2)} of $${budgetUsd.toFixed(2)} (API-equivalent).` });
       return true;
