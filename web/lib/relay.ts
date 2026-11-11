@@ -24,6 +24,7 @@ import {
   type Command,
   type EventType,
   type NewJobInput,
+  usesFreeModels,
 } from "@wdash/shared";
 import { hgetall, redis, xrange, xrevrange } from "./redis";
 
@@ -93,10 +94,12 @@ export async function createJob(input: NewJobInput, project: ProjectConfig): Pro
     location: "queued",
     kind: input.kind,
     chatModel: input.chatModel,
-    runOn: input.runOn,
+    // FreeLLMAPI lives on the PC (127.0.0.1), so those jobs never go to the cloud.
+    runOn: usesFreeModels(input) ? "home" : input.runOn,
     models: input.models,
     kaggleModel: input.kaggleModel,
     kaggleWorkerModel: input.kaggleWorkerModel,
+    freeModel: input.freeModel,
     orchestratorModel: input.orchestratorModel,
     leadModel: input.leadModel,
     workerModel: input.workerModel,

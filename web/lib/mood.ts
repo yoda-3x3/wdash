@@ -1,9 +1,10 @@
 // Visual moods (themes). Stored per device; applied to <html data-mood> before first paint by app/layout.tsx.
 
 export const MOOD_KEY = "wdash:mood";
-export const DEFAULT_MOOD = "hacker";
+export const DEFAULT_MOOD = "claude";
 
 export const MOODS = [
+  { id: "claude", label: "Claude Code", swatch: ["#1f1e1d", "#d97757"], about: "Looks like the Claude Code CLI" },
   { id: "hacker", label: "Hacker", swatch: ["#050805", "#39ff6a"], about: "Green terminal, scanlines" },
   { id: "defcon", label: "DEFCON", swatch: ["#0a0000", "#ff1f2d"], about: "Red alert" },
   { id: "cyberpunk", label: "Cyberpunk", swatch: ["#0d0221", "#ff2a6d"], about: "Neon pink and cyan" },

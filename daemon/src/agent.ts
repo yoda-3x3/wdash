@@ -13,6 +13,9 @@ import {
 import { truncate, sessionProjectKey, LITE_NOTES_CHARS, LITE_TOOLS, type AgentRecord, type AgentStatus } from "@wdash/shared";
 import { AsyncQueue } from "./asyncQueue.js";
 import { isKaggleModel, kaggleAgent } from "./kaggle.js";
+import { freeAgent, isFreeModel } from "./free.js";
+import { skillsPlugin } from "./skills.js";
+import { env as daemonEnv } from "./config.js";
 import { decide, DISALLOWED_TOOLS, type PolicyContext } from "./permissions.js";
 import { redisSessionStore } from "./sessionStore.js";
 import type { Relay } from "./relay.js";
@@ -178,7 +181,9 @@ export class AgentRunner {
     const lite = !!this.opts.lite;
     const notes = existsSync(claudeMd) ? readFileSync(claudeMd, "utf8") : "";
     const projectNotes = notes ? `\n\n# Project CLAUDE.md\n${lite ? truncate(notes, LITE_NOTES_CHARS) : notes}` : "";
-    const kaggle = isKaggleModel(this.rec.model) ? kaggleAgent(this.rec.model) : undefined;
+    const kaggle = isKaggleModel(this.rec.model) ? kaggleAgent(this.rec.model) : isFreeModel(this.rec.model) ? freeAgent(this.rec.model) : undefined;
+    // All of the user's Claude Code skills (their own, synced and plugin skills), without their settings.
+    const skills = skillsPlugin(daemonEnv().WDASH_STATE_DIR);
 
     return {
       cwd: this.opts.cwd,
@@ -190,6 +195,7 @@ export class AgentRunner {
       disallowedTools: DISALLOWED_TOOLS,
       ...(lite ? { tools: LITE_TOOLS, effort: "low" as const } : {}),
       mcpServers: { wdash: this.host.mcpServer(this) },
+      ...(lite || !skills.names.length ? {} : { plugins: [{ type: "local" as const, path: skills.dir }], skills: "all" as const }),
       systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: this.opts.systemAppend + projectNotes },
       resume: this.rec.sessionId,
       sessionStore: redisSessionStore(this.host.relay, sessionProjectKey(this.host.jobId, this.id)),
@@ -270,8 +276,8 @@ export class AgentRunner {
       }
       case "result": {
         this.busy = false;
-        // The SDK prices every model as Claude; the Kaggle server is free.
-        this.rec.costUsd = this.baseCostUsd + (isKaggleModel(this.rec.model) ? 0 : msg.total_cost_usd);
+        // The SDK prices every model as Claude; Kaggle and FreeLLMAPI are free.
+        this.rec.costUsd = this.baseCostUsd + (isKaggleModel(this.rec.model) || isFreeModel(this.rec.model) ? 0 : msg.total_cost_usd);
         await this.save();
         // An assistant-level API error may already have failed this agent; don't raise the same stop twice.
         if ((msg.is_error || msg.subtype !== "success") && this.rec.status !== "failed") {

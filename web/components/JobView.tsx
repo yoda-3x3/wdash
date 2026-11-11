@@ -437,7 +437,7 @@ function EventRow({ e, result, answer }: { e: WdEvent; result?: WdEvent; answer?
   const p = e.payload as Record<string, unknown>;
   const time = new Date(e.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const head = (
-    <span className="mr-2 inline-flex items-center gap-1.5 text-[11px] text-muted">
+    <span className="cc-head mr-2 inline-flex items-center gap-1.5 text-[11px] text-muted">
       <span>{time}</span>
       {e.type === "message" && p.role === "user" ? (
         <>
@@ -451,22 +451,25 @@ function EventRow({ e, result, answer }: { e: WdEvent; result?: WdEvent; answer?
   switch (e.type) {
     case "message":
       return (
-        <div className={`rounded-lg px-3 py-2 text-sm ${p.role === "user" ? "ml-8 bg-accent/10" : "bg-panel"}`}>
+        <div className={`cc-msg ${p.role === "user" ? "cc-user" : "cc-assistant"} rounded-lg px-3 py-2 text-sm ${p.role === "user" ? "ml-8 bg-accent/10" : "bg-panel"}`}>
           {head}
-          <div className="mt-0.5 whitespace-pre-wrap break-words">{String(p.text ?? "")}</div>
+          <div className="cc-body mt-0.5 whitespace-pre-wrap break-words">{String(p.text ?? "")}</div>
         </div>
       );
     case "tool_call": {
       if (p.tool === "AskUserQuestion") return null;
       const ok = result ? (result.payload.ok as boolean) : undefined;
+      const arg = summarizeInput(p.input);
       return (
-        <details className="rounded-lg bg-panel px-3 py-1.5 text-xs">
+        <details className="cc-call rounded-lg bg-panel px-3 py-1.5 text-xs" data-cc={ok === undefined ? "pending" : ok ? "ok" : "err"}>
           <summary className="cursor-pointer">
             {head}
-            <span className="font-mono">{String(p.tool)}</span>{" "}
-            <span className="text-muted">{summarizeInput(p.input)}</span>
-            {ok === false && <span className="ml-1 text-bad">✗</span>}
-            {ok === undefined && <span className="ml-1 text-muted">…</span>}
+            <span className="cc-tool font-mono">{String(p.tool)}</span>
+            <span className="cc-gap"> </span>
+            {arg ? <span className="cc-arg text-muted">{arg}</span> : <span className="text-muted" />}
+            {ok === false && <span className="cc-status ml-1 text-bad">✗</span>}
+            {ok === undefined && <span className="cc-status ml-1 text-muted">…</span>}
+            {result && <ResultPreview output={String(result.payload.output ?? "")} />}
           </summary>
           <pre className="code mt-1.5">{JSON.stringify(p.input, null, 2)}</pre>
           {result && <pre className="code mt-1.5 max-h-80">{String(result.payload.output ?? "")}</pre>}
@@ -592,6 +595,28 @@ function summarizeInput(input: unknown): string {
   const v = o.command ?? o.file_path ?? o.pattern ?? o.path ?? o.url ?? o.query ?? o.description ?? o.to ?? o.agent;
   const s = typeof v === "string" ? v : "";
   return s.length > 90 ? `${s.slice(0, 90)}…` : s;
+}
+
+const PREVIEW_LINES = 3;
+
+/** CLI-style "⎿ first lines… +N lines" under a tool call. Hidden (.cc-only) except in the Claude Code mood. */
+function ResultPreview({ output }: { output: string }) {
+  const lines = output.replace(/\s+$/, "").split("\n");
+  const shown = output.trim() ? lines.slice(0, PREVIEW_LINES).map((l) => (l.length > 300 ? `${l.slice(0, 300)}…` : l)) : ["(no output)"];
+  const more = output.trim() ? lines.length - shown.length : 0;
+  return (
+    <span className="cc-only cc-result" aria-hidden>
+      <span className="cc-elbow">⎿</span>
+      <span>
+        {shown.map((l, i) => (
+          <span key={i} className="cc-line">
+            {l || " "}
+          </span>
+        ))}
+        {more > 0 && <span className="cc-line">… +{more} lines (click to expand)</span>}
+      </span>
+    </span>
+  );
 }
 
 // ---------------------------------------------------------------- team
@@ -857,14 +882,18 @@ function Working({ agents, events }: { agents: AgentRecord[]; events: WdEvent[] 
         ? "writing a reply"
         : "thinking";
   return (
-    <div className="flex items-center gap-2 px-1 text-xs text-muted" role="status" aria-live="polite">
-      <span className="flex gap-1" aria-hidden>
+    <div className="cc-working-row flex items-center gap-2 px-1 text-xs text-muted" role="status" aria-live="polite">
+      <span className="cc-dots flex gap-1" aria-hidden>
         <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.3s]" />
         <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.15s]" />
         <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent" />
       </span>
       <span className="truncate">
-        <span className="font-medium text-fg">{busy.map((a) => a.id).join(", ")}</span> {busy.length === 1 ? "is" : "are"} working… {step && <span>({step})</span>}
+        <span className="cc-working-default">
+          <span className="font-medium text-fg">{busy.map((a) => a.id).join(", ")}</span> {busy.length === 1 ? "is" : "are"} working…{" "}
+        </span>
+        <span className="cc-only cc-working">✻ Working… </span>
+        {step && <span>({step})</span>}
       </span>
     </div>
   );
@@ -894,7 +923,7 @@ function ChatBox({ jobId, agents, lead, asking, reopen = false }: { jobId: strin
   const canSend = !busy && !files.busy && (!!text.trim() || files.ready.length > 0);
   return (
     <form
-      className="sticky bottom-[calc(0.5rem+env(safe-area-inset-bottom))] z-10 space-y-2 rounded-xl border border-line bg-panel p-2 shadow-lg"
+      className="cc-chatbox sticky bottom-[calc(0.5rem+env(safe-area-inset-bottom))] z-10 space-y-2 rounded-xl border border-line bg-panel p-2 shadow-lg"
       {...dropProps(files.add)}
       onSubmit={async (e) => {
         e.preventDefault();
@@ -929,6 +958,9 @@ function ChatBox({ jobId, agents, lead, asking, reopen = false }: { jobId: strin
             <option value="*">everyone</option>
           </select>
         )}
+        <span className="cc-only cc-prompt" aria-hidden>
+          &gt;
+        </span>
         <input data-chat-input className="input" placeholder={reopen ? `Follow up with ${to}… (reopens the job)` : asking.includes(to) ? `Answer ${to}'s question…` : `Message ${to}…`} value={text} onChange={(e) => setText(e.target.value)} />
         <button data-chat-send className="btn btn-primary" disabled={!canSend}>
           Send

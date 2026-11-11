@@ -230,6 +230,238 @@ html[data-mood] .mood-icon {
   box-shadow: 0 0 0 1px var(--accent), 0 0 8px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
+/* ---------------------------------------------------------------- Claude Code mood
+   Looks like the Claude Code CLI: warm charcoal, Claude orange, monospace, small radii, 1px boxes.
+   The transcript hooks (.cc-*) are added in JobView; elements marked .cc-only are hidden in every other mood. */
+
+.cc-only {
+  display: none;
+}
+
+html[data-mood="claude"] {
+  --bg: #1f1e1d;
+  --panel: #262624;
+  --panel-2: #30302e;
+  --line: #3d3d3a;
+  --fg: #e8e6e3;
+  --muted: #9b9a97;
+  --accent: #d97757;
+  --accent-fg: #1f1e1d;
+  --ok: #4eba65;
+  --warn: #ffc107;
+  --bad: #ff6b80;
+  --info: #b1b9f9;
+  --cc-font: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+  --font-sans: var(--cc-font);
+  --font-mono: var(--cc-font);
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 4px;
+  --radius-xl: 6px;
+  --radius-2xl: 6px;
+  color-scheme: dark;
+}
+html[data-mood="claude"] body {
+  font-family: var(--cc-font);
+  font-size: 14px;
+}
+
+/* Bordered boxes, outlined primary buttons. */
+html[data-mood="claude"] .card {
+  border-width: 1px;
+  border-radius: 6px;
+}
+html[data-mood="claude"] :is(.btn, .input) {
+  border-radius: 4px;
+}
+html[data-mood="claude"] pre.code {
+  border-radius: 4px;
+}
+html[data-mood="claude"] .btn-primary {
+  border-color: var(--accent);
+  background: transparent;
+  color: var(--accent);
+  opacity: 1;
+}
+html[data-mood="claude"] .btn-primary:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--accent-fg);
+  opacity: 1;
+}
+html[data-mood="claude"] .btn-primary:disabled {
+  opacity: 0.5;
+}
+
+/* Header: "✻ wdash" like the CLI welcome line. */
+html[data-mood="claude"] .mood-icon {
+  display: none;
+}
+html[data-mood="claude"] .mood-prompt {
+  display: inline;
+}
+html[data-mood="claude"] .mood-prompt::before {
+  content: "\273B";
+  margin-right: 1ch;
+  color: var(--accent);
+}
+
+/* Transcript: assistant text "⏺ …". */
+html[data-mood="claude"] .cc-msg {
+  border-radius: 4px;
+  font-size: 14px;
+}
+html[data-mood="claude"] .cc-assistant {
+  background: transparent;
+  padding: 2px 4px;
+}
+html[data-mood="claude"] .cc-msg .cc-body {
+  margin-top: 0;
+  padding-left: 2ch;
+}
+html[data-mood="claude"] .cc-assistant .cc-body::before {
+  content: "\23FA\FE0E";
+  display: inline-block;
+  width: 2ch;
+  margin-left: -2ch;
+  color: var(--fg);
+}
+/* User messages: "> …" on a slightly lighter row. */
+html[data-mood="claude"] .cc-user {
+  margin-left: 0;
+  background: var(--panel-2);
+  padding: 4px;
+}
+html[data-mood="claude"] .cc-user .cc-body::before {
+  content: ">";
+  display: inline-block;
+  width: 2ch;
+  margin-left: -2ch;
+  color: var(--muted);
+}
+/* Time and agent go to the right, out of the way of the CLI-style line. */
+html[data-mood="claude"] :is(.cc-msg, .cc-call) .cc-head {
+  float: right;
+  margin: 2px 0 0 1ch;
+}
+
+/* Tool calls: "⏺ Tool(arg)", bullet green when ok, red on error, muted while pending. */
+html[data-mood="claude"] .cc-call {
+  background: transparent;
+  padding: 2px 4px;
+  font-size: 14px;
+}
+html[data-mood="claude"] .cc-call > summary {
+  list-style: none;
+  padding-left: 2ch;
+}
+html[data-mood="claude"] .cc-call > summary::-webkit-details-marker {
+  display: none;
+}
+html[data-mood="claude"] .cc-call > summary::before {
+  content: "\23FA\FE0E";
+  display: inline-block;
+  width: 2ch;
+  margin-left: -2ch;
+  color: var(--muted);
+}
+html[data-mood="claude"] .cc-call[data-cc="ok"] > summary::before {
+  color: var(--ok);
+}
+html[data-mood="claude"] .cc-call[data-cc="err"] > summary::before {
+  color: var(--bad);
+}
+html[data-mood="claude"] .cc-call[data-cc="pending"] > summary::before {
+  animation: cc-pulse 1.6s ease-in-out infinite;
+}
+html[data-mood="claude"] .cc-tool {
+  font-weight: 700;
+}
+html[data-mood="claude"] .cc-gap,
+html[data-mood="claude"] .cc-status {
+  display: none;
+}
+html[data-mood="claude"] .cc-arg {
+  color: var(--fg);
+}
+html[data-mood="claude"] .cc-arg::before {
+  content: "(";
+}
+html[data-mood="claude"] .cc-arg::after {
+  content: ")";
+}
+/* Result preview under the call: "  ⎿  first lines…" (the full output is still in the expanded details). */
+html[data-mood="claude"] .cc-result {
+  display: grid;
+  grid-template-columns: 5ch minmax(0, 1fr);
+  color: var(--muted);
+  margin-left: -2ch;
+}
+html[data-mood="claude"] .cc-call[open] .cc-result {
+  display: none;
+}
+html[data-mood="claude"] .cc-elbow {
+  padding-left: 2ch;
+}
+html[data-mood="claude"] .cc-line {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+html[data-mood="claude"] .cc-call[data-cc="err"] .cc-line {
+  color: var(--bad);
+}
+html[data-mood="claude"] .cc-call > :is(pre, .cc-detail) {
+  margin-left: 2ch;
+}
+
+/* "✻ Working…" in accent with a subtle pulse. */
+html[data-mood="claude"] .cc-dots,
+html[data-mood="claude"] .cc-working-default {
+  display: none;
+}
+html[data-mood="claude"] .cc-working {
+  display: inline;
+  color: var(--accent);
+  animation: cc-pulse 2s ease-in-out infinite;
+}
+html[data-mood="claude"] .cc-working-row {
+  font-size: 14px;
+}
+@keyframes cc-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Message box: one 1px rounded box with a muted "> " prompt at the left. */
+html[data-mood="claude"] .cc-chatbox {
+  border-radius: 6px;
+  box-shadow: none;
+  background: var(--bg);
+}
+html[data-mood="claude"] .cc-chatbox:focus-within {
+  border-color: var(--muted);
+}
+html[data-mood="claude"] .cc-prompt {
+  display: flex;
+  align-items: center;
+  padding-left: 4px;
+  color: var(--muted);
+}
+html[data-mood="claude"] .cc-chatbox [data-chat-input] {
+  border-color: transparent;
+  background: transparent;
+  padding-left: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-mood="claude"] .cc-working,
+  html[data-mood="claude"] .cc-call[data-cc="pending"] > summary::before {
+    animation: none;
+  }
+}
+
 /* ---------------------------------------------------------------- call blobs (Conference) */
 .blob {
   border-radius: 46% 54% 52% 48% / 50% 46% 54% 50%;

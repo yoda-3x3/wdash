@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
+  FREE_MODELS,
   KAGGLE_MODELS,
   KAGGLE_TPU_MODELS,
   MAX_WORKERS,
@@ -11,6 +12,7 @@ import {
   NO_PROJECT,
   WORKER_CHOICES,
   presetLabel,
+  usesFreeModels,
   type ChatModel,
   type JobKind,
   type ModelPreset,
@@ -27,7 +29,7 @@ const LAST_PROJECT = "wdash:lastProject";
 const REPO_PREFIX = "repo:";
 const AUTO_MODE = "wdash:autoMode";
 
-const CHAT_MODELS: Record<ChatModel, string> = { sonnet: "Sonnet", opus: "Opus", haiku: "Haiku", kaggle: "Kaggle GPU (open model, free)" };
+const CHAT_MODELS: Record<ChatModel, string> = { sonnet: "Sonnet", opus: "Opus", haiku: "Haiku", kaggle: "Kaggle GPU (open model, free)", free: "FreeLLMAPI (free models, PC only)" };
 
 /** Hybrid form (SPEC.md §4): project + task up front, everything else under Advanced. Also starts chats. */
 export function NewJob({ kind = "team" }: { kind?: JobKind }) {
@@ -59,6 +61,9 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
   const custom = !chat && models === "custom";
   const customKaggle = custom && Object.values(tiers).some((m) => m.startsWith("kaggle:"));
   const kaggle = chat ? chatModel === "kaggle" : models === "kaggle";
+  const [freeModel, setFreeModel] = useState(FREE_MODELS[0]!.id);
+  const free = usesFreeModels({ kind, chatModel, models, ...tiers });
+  const freeAll = chat ? chatModel === "free" : models === "free";
   const [autoMode, setAutoMode] = useState(false);
   const [lite, setLite] = useState(false);
 
@@ -94,7 +99,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
 
   const selected = projects.find((p) => p.name === project);
   const online = state?.home.online;
-  const where = runOn === "home" ? "your PC" : runOn === "cloud" ? "the cloud" : online ? "your PC" : "the cloud (PC is offline)";
+  const where = free ? (online ? "your PC (FreeLLMAPI)" : "your PC when it's back online (FreeLLMAPI)") : runOn === "home" ? "your PC" : runOn === "cloud" ? "the cloud" : online ? "your PC" : "the cloud (PC is offline)";
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -125,6 +130,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
         models,
         kaggleModel: kaggle ? kaggleModel : "",
         kaggleWorkerModel: kaggle && !chat && kaggleWorkerModel !== kaggleModel ? kaggleWorkerModel : "",
+        freeModel: freeAll ? freeModel : "",
         ...(custom ? tiers : {}),
         refRepos,
         runOn,
@@ -239,6 +245,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
         </Field>
       )}
       {chat && kaggle && <KaggleModelField label="Kaggle model" value={kaggleModel} onChange={setKaggleModel} />}
+      {chat && freeAll && <FreeModelField value={freeModel} onChange={setFreeModel} />}
 
       <label className="flex items-start gap-2 text-sm">
         <input type="checkbox" className="mt-1" checked={autoMode} onChange={(e) => setAutoMode(e.target.checked)} />
@@ -304,6 +311,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
                   )}
                 </>
               )}
+              {freeAll && <FreeModelField label="FreeLLMAPI model (every agent)" value={freeModel} onChange={setFreeModel} />}
               {kaggle && (
                 <>
                   <KaggleModelField label={shape === "three-tier" ? "Kaggle model: orchestrator + leads" : "Kaggle model: orchestrator"} value={kaggleModel} onChange={setKaggleModel} />
@@ -316,7 +324,7 @@ export function NewJob({ kind = "team" }: { kind?: JobKind }) {
             </>
           )}
           <Field label="Run on">
-            <select className="input" value={runOn} onChange={(e) => setRunOn(e.target.value)}>
+            <select className="input" value={free ? "home" : runOn} disabled={free} onChange={(e) => setRunOn(e.target.value)}>
               <option value="auto">Auto (PC if online)</option>
               <option value="home">PC only (wait if offline)</option>
               <option value="cloud" disabled={selected && !selected.cloud}>
@@ -373,6 +381,13 @@ function TierField({ label, value, onChange }: { label: string; value: string; o
             </option>
           ))}
         </optgroup>
+        <optgroup label="FreeLLMAPI (free, PC only)">
+          {FREE_MODELS.map((m) => (
+            <option key={m.id} value={`free:${m.id}`}>
+              {m.label}
+            </option>
+          ))}
+        </optgroup>
         <optgroup label="Kaggle TPU (free, experimental)">
           {KAGGLE_TPU_MODELS.map((m) => (
             <option key={m.id} value={`kaggle:${m.id}`}>
@@ -404,6 +419,20 @@ function KaggleModelField({ label = "Kaggle model", value, onChange, same }: { l
             </option>
           ))}
         </optgroup>
+      </select>
+    </Field>
+  );
+}
+
+function FreeModelField({ label = "FreeLLMAPI model", value, onChange }: { label?: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <Field label={label}>
+      <select className="input" value={value} onChange={(e) => onChange(e.target.value)}>
+        {FREE_MODELS.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label}
+          </option>
+        ))}
       </select>
     </Field>
   );

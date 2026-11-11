@@ -17,6 +17,8 @@ export type PolicyContext = {
   /** Rules the user allowed for the whole job, e.g. "Bash:npm run lint". */
   jobRules: string[];
   platform?: NodeJS.Platform;
+  /** Extra folders the read-only tools may read (the user's skills). */
+  readRoots?: string[];
 };
 
 export type Decision =
@@ -77,7 +79,8 @@ export function decide(tool: string, input: Record<string, unknown>, ctx: Policy
 
   if (READ_ONLY_TOOLS.has(tool)) {
     const p = pathArg(input);
-    if (p && !inside(ctx.root, p, ctx.platform)) return { kind: "deny", message: `Path is outside the project: ${p}` };
+    if (p && !inside(ctx.root, p, ctx.platform) && !(ctx.readRoots ?? []).some((r) => inside(r, p, ctx.platform)))
+      return { kind: "deny", message: `Path is outside the project: ${p}` };
     return { kind: "allow" };
   }
 

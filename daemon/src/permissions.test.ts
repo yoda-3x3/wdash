@@ -77,3 +77,15 @@ test("a lead (3-tier) never edits, even paths in its own area", () => {
   assert.match(d.kind === "deny" ? d.message : "", /lead doesn't edit files/);
   assert.equal(decide("Read", { file_path: join(root, "src/solver/x.ts") }, lead).kind, "allow");
 });
+
+test("readRoots let read-only tools read skill folders, nothing else", () => {
+  const skills = resolve("/tmp/home/.claude/skills");
+  const withRoots: PolicyContext = { ...ctx, readRoots: [skills] };
+  assert.equal(decide("Read", { file_path: join(skills, "pdf", "SKILL.md") }, withRoots).kind, "allow");
+  assert.equal(decide("Glob", { pattern: "*.md", path: join(skills, "pdf") }, withRoots).kind, "allow");
+  assert.equal(decide("Read", { file_path: resolve("/etc/passwd") }, withRoots).kind, "deny");
+  assert.equal(decide("Read", { file_path: resolve("/tmp/home/.claude/settings.json") }, withRoots).kind, "deny");
+  assert.equal(decide("Read", { file_path: join(skills, "pdf", "SKILL.md") }, ctx).kind, "deny");
+  // readRoots never grant edits.
+  assert.equal(decide("Edit", { file_path: join(skills, "pdf", "SKILL.md") }, withRoots).kind, "deny");
+});

@@ -65,7 +65,7 @@ export const RunOn = z.enum(["auto", "home", "cloud"]);
 
 export const MergeState = z.enum(["none", "pending", "merged", "needs_merge", "left_as_branch", "discarded"]);
 
-export const ModelPreset = z.enum(["opus-sonnet", "opus-opus", "sonnet-haiku", "opus-sonnet-haiku", "kaggle", "custom"]);
+export const ModelPreset = z.enum(["opus-sonnet", "opus-opus", "sonnet-haiku", "opus-sonnet-haiku", "kaggle", "free", "custom"]);
 export type ModelPreset = z.infer<typeof ModelPreset>;
 
 /** `lead`: the middle tier in a 3-tier team (orchestrator -> leads -> workers). */
@@ -76,19 +76,38 @@ export const MODEL_PRESETS: Record<ModelPreset, { orchestrator: string; lead: st
   "opus-sonnet-haiku": { orchestrator: "opus", lead: "sonnet", worker: "haiku", label: "Opus orchestrator + Haiku workers" },
   // Open model on the free Kaggle GPU server (daemon/src/kaggle.ts).
   kaggle: { orchestrator: "kaggle", lead: "kaggle", worker: "kaggle", label: "Kaggle GPU (open model, free)" },
+  // FreeLLMAPI, the free-model router on the PC (daemon/src/free.ts). job.freeModel picks the model (default "auto").
+  free: { orchestrator: "free", lead: "free", worker: "free", label: "FreeLLMAPI (free models, PC only)" },
   // Each tier from the job's orchestratorModel/leadModel/workerModel; these are the fallbacks.
-  custom: { orchestrator: "sonnet", lead: "sonnet", worker: "haiku", label: "Custom: pick each tier (mix Claude and Kaggle)" },
+  custom: { orchestrator: "sonnet", lead: "sonnet", worker: "haiku", label: "Custom: pick each tier (mix Claude, Kaggle and FreeLLMAPI)" },
 };
 
-/** A tier's model in a custom job: a Claude model or "kaggle:<ollama model>". Empty = the custom preset's fallback. */
-export const TierModel = z.string().max(110).regex(/^(|opus|sonnet|haiku|kaggle:[\w.:/-]+)$/, "not a model");
+/** A tier's model in a custom job: a Claude model, "kaggle:<ollama model>" or "free:<FreeLLMAPI model>". Empty = the custom preset's fallback. */
+export const TierModel = z.string().max(110).regex(/^(|opus|sonnet|haiku|kaggle:[\w.:/-]+|free:[\w.:/-]+)$/, "not a model");
+
+/** FreeLLMAPI model ids offered in the UI (any id from FreeLLMAPI > Models works). The first is the default. */
+export const FREE_MODELS: Array<{ id: string; label: string }> = [
+  { id: "auto", label: "Auto (router picks the best free model)" },
+  { id: "auto:fast", label: "Auto, fastest models" },
+  { id: "claude-opus-4-5", label: "Opus slot (routed to a strong free model)" },
+  { id: "claude-sonnet-4-5", label: "Sonnet slot" },
+  { id: "claude-haiku-4-5", label: "Haiku slot (fast)" },
+  { id: "fusion", label: "Fusion (a panel answers, a judge merges; slow)" },
+];
+
+/** True when any agent of the job runs on FreeLLMAPI, which only the PC can reach. */
+export function usesFreeModels(j: { kind?: string; chatModel?: string; models?: string; orchestratorModel?: string; leadModel?: string; workerModel?: string }): boolean {
+  if (j.kind === "chat") return j.chatModel === "free";
+  if (j.models === "free") return true;
+  return j.models === "custom" && [j.orchestratorModel, j.leadModel, j.workerModel].some((m) => m?.startsWith("free:"));
+}
 
 const tierName = (m: string) => m[0]!.toUpperCase() + m.slice(1);
 
 /** A preset's label for a team shape: 3-tier teams name the lead tier too. */
 export function presetLabel(preset: ModelPreset, shape: TeamShape): string {
   const p = MODEL_PRESETS[preset];
-  if (shape !== "three-tier" || preset === "kaggle" || preset === "custom") return p.label;
+  if (shape !== "three-tier" || preset === "kaggle" || preset === "free" || preset === "custom") return p.label;
   return `${tierName(p.orchestrator)} orchestrator → ${tierName(p.lead)} leads → ${tierName(p.worker)} workers`;
 }
 
@@ -178,7 +197,7 @@ export type TeamShape = z.infer<typeof TeamShape>;
 export const JobKind = z.enum(["team", "chat"]);
 export type JobKind = z.infer<typeof JobKind>;
 
-export const ChatModel = z.enum(["opus", "sonnet", "haiku", "kaggle"]);
+export const ChatModel = z.enum(["opus", "sonnet", "haiku", "kaggle", "free"]);
 export type ChatModel = z.infer<typeof ChatModel>;
 
 /** Agent id of a chat job's single agent. */
@@ -206,6 +225,8 @@ export const JobRecord = z.object({
   kaggleModel: KaggleModel.default(""),
   /** Workers' Kaggle model when it differs (a second server). Empty = same as kaggleModel. */
   kaggleWorkerModel: KaggleModel.default(""),
+  /** FreeLLMAPI model id for the "free" preset or chat model. Empty = "auto". */
+  freeModel: KaggleModel.default(""),
   /** Custom preset: each tier's model (see TierModel). */
   orchestratorModel: TierModel.default(""),
   leadModel: TierModel.default(""),
@@ -302,6 +323,8 @@ export const NewJobInput = z.object({
   kaggleModel: KaggleModel.default(""),
   /** Workers' Kaggle model when it differs (a second server). Empty = same as kaggleModel. */
   kaggleWorkerModel: KaggleModel.default(""),
+  /** FreeLLMAPI model id for the "free" preset or chat model. Empty = "auto". */
+  freeModel: KaggleModel.default(""),
   /** Custom preset: each tier's model (see TierModel). */
   orchestratorModel: TierModel.default(""),
   leadModel: TierModel.default(""),

@@ -34,6 +34,8 @@ import { runChecks, type CheckResult } from "./checks.js";
 import { env } from "./config.js";
 import * as G from "./git.js";
 import { ensureKaggleFor, isKaggleModel, kaggleModelName } from "./kaggle.js";
+import { ensureFree, isFreeModel } from "./free.js";
+import { skillsPlugin } from "./skills.js";
 import { clear, clearJob, raise } from "./notify.js";
 import { conflictingClaims, globsOverlap, inside, type PolicyContext } from "./permissions.js";
 import { OTHER_REPOS_DIR, openRepo, pushRepo } from "./otherRepos.js";
@@ -184,7 +186,7 @@ export class JobRunner implements AgentHost, TeamApi {
       await Promise.all([...new Set(first)].map((m) => this.ensureModel(m)));
       if (this.job.kind === "team") {
         const later = [this.roleModel("worker"), ...(this.job.shape === "three-tier" ? [this.roleModel("lead")] : [])];
-        for (const m of new Set(later)) void this.ensureModel(m).catch((e) => this.info(`Kaggle server for ${m} didn't start: ${(e as Error).message}`));
+        for (const m of new Set(later)) void this.ensureModel(m).catch((e) => this.info(`The model server for ${m} didn't start: ${(e as Error).message}`));
       }
       if (existing.length) await this.resumeAgents(existing);
       else if (this.job.kind === "chat") await this.startChat();
@@ -350,11 +352,15 @@ export class JobRunner implements AgentHost, TeamApi {
   /** The model an agent in `role` runs: a Claude model, "kaggle" (the server's default), or "kaggle:<model>". */
   private roleModel(role: AgentRecord["role"]): string {
     const j = this.job;
-    if (role === "chat") return j.chatModel === "kaggle" && j.kaggleModel ? `kaggle:${j.kaggleModel}` : j.chatModel;
+    if (role === "chat") {
+      if (j.chatModel === "free") return `free:${j.freeModel || "auto"}`;
+      return j.chatModel === "kaggle" && j.kaggleModel ? `kaggle:${j.kaggleModel}` : j.chatModel;
+    }
     const tier = role === "orchestrator" ? "orchestrator" : role === "lead" ? "lead" : "worker";
     const custom = j.models === "custom" ? { orchestrator: j.orchestratorModel, lead: j.leadModel, worker: j.workerModel }[tier] : "";
     if (custom) return custom;
     const m = MODEL_PRESETS[j.models][tier];
+    if (m === "free") return `free:${j.freeModel || "auto"}`;
     if (m !== "kaggle") return m;
     const picked = (tier === "worker" && j.kaggleWorkerModel) || j.kaggleModel;
     return picked ? `kaggle:${picked}` : m;
@@ -363,6 +369,7 @@ export class JobRunner implements AgentHost, TeamApi {
   /** Start (or reuse) the Kaggle server for a Kaggle model; Claude models need nothing. */
   private async ensureModel(model: string): Promise<void> {
     if (isKaggleModel(model)) await ensureKaggleFor(this.relay, kaggleModelName(model), (text) => this.info(text));
+    else if (isFreeModel(model)) await ensureFree();
   }
 
   /** Index of worker-cache entries for this project (and "all"), appended to every agent's instructions. */
@@ -650,6 +657,7 @@ export class JobRunner implements AgentHost, TeamApi {
       claims,
       commands: this.project.commands,
       jobRules: rules,
+      readRoots: skillsPlugin(env().WDASH_STATE_DIR).roots,
     };
   }
 
