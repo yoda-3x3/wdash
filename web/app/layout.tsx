@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { MOOD_BOOT } from "@/lib/mood";
+import { Analytics } from "@vercel/analytics/next";
 
 export const metadata: Metadata = {
   title: "wdash",
@@ -27,7 +28,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <script dangerouslySetInnerHTML={{ __html: MOOD_BOOT }} />
       </head>
-      <body className="min-h-dvh font-sans antialiased">{children}</body>
+      <body className="min-h-dvh font-sans antialiased">
+        {children}
+        <Analytics />
+      </body>
     </html>
   );
 }
