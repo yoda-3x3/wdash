@@ -6,6 +6,7 @@
 export const PAGES = [
   { href: "/", label: "Wall" },
   { href: "/inbox", label: "Inbox" },
+  { href: "/skills", label: "Skills" },
   { href: "/settings", label: "Settings" },
 ] as const;
 

@@ -1,6 +1,7 @@
 import { hostname } from "node:os";
 import { K, KaggleControl, NO_PROJECT, TERMINAL_STATUSES, scratchProject, type ProjectConfig } from "@wdash/shared";
-import { loadLocalProjects } from "./config.js";
+import { env, loadLocalProjects } from "./config.js";
+import { skillsList } from "./skills.js";
 import { pushBase, syncIntoCheckout } from "./git.js";
 import { JobRunner } from "./job.js";
 import { handleKaggleControl, liveKaggleServers } from "./kaggle.js";
@@ -18,6 +19,10 @@ export async function runHome(): Promise<void> {
   let projects = loadLocalProjects();
   if (!projects.length) console.warn("No projects in config/projects.json — nothing can run until you add one.");
   await relay.publishProjects(projects);
+  // The skills every agent gets, for the website's /skills page and chat slash commands.
+  const skills = skillsList(env().WDASH_STATE_DIR);
+  await relay.r.set(K.skills, JSON.stringify(skills));
+  console.log(`${skills.length} skill(s) for agents`);
   console.log(`wdash home daemon: ${projects.length} project(s): ${projects.map((p) => p.name).join(", ") || "-"}`);
 
   const running = new Map<string, Promise<unknown>>();

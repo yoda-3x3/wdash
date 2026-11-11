@@ -9,6 +9,7 @@ import { api, timeAgo, tokenTitle, tokens, usd, usePoll } from "@/lib/client";
 import { ApproveAll, AttentionCard, Bar, LocationBadge, StatusChip } from "./bits";
 import { AttachButton, FileChips, dropProps, fmtSize, useUploads } from "./Attachments";
 import { Conference } from "./Conference";
+import { SlashMenu, expandSlash, useSkills } from "./Skills";
 
 type Detail = {
   job: JobRecord;
@@ -921,6 +922,7 @@ function ChatBox({ jobId, agents, lead, asking, reopen = false }: { jobId: strin
   const files = useUploads(`/api/jobs/${jobId}/files`);
   const live = agents.filter((a) => !["done", "stopped"].includes(a.status));
   const canSend = !busy && !files.busy && (!!text.trim() || files.ready.length > 0);
+  const skills = useSkills();
   return (
     <form
       className="cc-chatbox sticky bottom-[calc(0.5rem+env(safe-area-inset-bottom))] z-10 space-y-2 rounded-xl border border-line bg-panel p-2 shadow-lg"
@@ -928,10 +930,16 @@ function ChatBox({ jobId, agents, lead, asking, reopen = false }: { jobId: strin
       onSubmit={async (e) => {
         e.preventDefault();
         if (!canSend) return;
+        // "/skills" lists the skills, like in the CLI.
+        if (text.trim() === "/skills") {
+          window.location.href = "/skills";
+          return;
+        }
         setBusy(true);
         try {
           const attachments = files.ready.map((f) => f.id);
-          const msg = text.trim() || `Attached: ${files.ready.map((f) => f.name).join(", ")}`;
+          // "/tdd …" runs that skill: the agent's slash command is "/skills:tdd …".
+          const msg = expandSlash(text.trim(), skills) || `Attached: ${files.ready.map((f) => f.name).join(", ")}`;
           await api(`/api/jobs/${jobId}/cmd`, {
             cmd: { type: "user_message", text: msg, agentId: to, attachments: attachments.length ? attachments : undefined },
           });
@@ -945,6 +953,7 @@ function ChatBox({ jobId, agents, lead, asking, reopen = false }: { jobId: strin
       }}
     >
       <FileChips items={files.items} onRemove={files.remove} />
+      <SlashMenu text={text} skills={skills} onPick={setText} />
       <div className="flex gap-2">
         <AttachButton onFiles={files.add} compact />
         {agents.length > 1 && (
@@ -961,7 +970,7 @@ function ChatBox({ jobId, agents, lead, asking, reopen = false }: { jobId: strin
         <span className="cc-only cc-prompt" aria-hidden>
           &gt;
         </span>
-        <input data-chat-input className="input" placeholder={reopen ? `Follow up with ${to}… (reopens the job)` : asking.includes(to) ? `Answer ${to}'s question…` : `Message ${to}…`} value={text} onChange={(e) => setText(e.target.value)} />
+        <input data-chat-input className="input" placeholder={reopen ? `Follow up with ${to}… (reopens the job)` : asking.includes(to) ? `Answer ${to}'s question…` : `Message ${to}… (/ for skills)`} value={text} onChange={(e) => setText(e.target.value)} />
         <button data-chat-send className="btn btn-primary" disabled={!canSend}>
           Send
         </button>

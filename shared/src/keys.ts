@@ -41,6 +41,7 @@ export const K = {
   projectRequest: (id: string) => `wd:projreq:${id}`, // STRING EX 1 day: ProjectRequest JSON
   homeHeartbeat: "wd:daemon:home:heartbeat",
   cloudHeartbeat: (id: string) => `wd:daemon:cloud:${id}:heartbeat`,
+  skills: "wd:skills", // STRING JSON [{name, description}]: the skills agents get (published by home daemon)
   projects: "wd:projects", // HASH name -> ProjectConfig JSON (published by home daemon)
   mergeQueue: "wd:merge_queue", // ZSET job_id -> ts (finished jobs awaiting sync into the home checkout)
   attention: "wd:attention", // HASH attention_id -> Attention JSON (open items only)

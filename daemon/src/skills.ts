@@ -47,13 +47,35 @@ export function skillsPlugin(stateDir: string): { dir: string; names: string[]; 
   return built;
 }
 
+export type SkillInfo = { name: string; description: string };
+
+/** Name and description of every skill agents get (from SKILL.md frontmatter), for the website's /skills page. */
+export function skillsList(stateDir: string): SkillInfo[] {
+  const { dir, names } = skillsPlugin(stateDir);
+  return names.map((name) => {
+    let description = "";
+    try {
+      const md = readFileSync(join(dir, "skills", name, "SKILL.md"), "utf8");
+      const fm = md.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
+      const m = fm.match(/^description:\s*(?:>-?|\|-?)?\s*\r?\n?([\s\S]*?)(?=\r?\n[\w-]+:|$)/m);
+      description = (m?.[1] ?? "").replace(/\s+/g, " ").replace(/^["']|["']$/g, "").trim();
+    } catch {
+      /* no description */
+    }
+    return { name, description: description.slice(0, 400) };
+  });
+}
+
 function findSkills(): Array<{ root: string; path: string; name: string }> {
   const out: Array<{ root: string; path: string; name: string }> = [];
   const userSkills = join(CLAUDE_DIR, "skills");
   out.push(...skillDirs(userSkills, userSkills));
   const synced = join(userSkills, "synced");
   for (const id of subdirs(synced)) out.push(...skillDirs(join(synced, id), userSkills));
-  for (const p of installedPlugins()) {
+  // Plugins synced from claude.ai (e.g. Desktop Commander): ~/.claude/plugins/synced/<org>/<plugin>/.
+  const syncedPlugins = join(CLAUDE_DIR, "plugins", "synced");
+  const synced2 = subdirs(syncedPlugins).flatMap((a) => subdirs(join(syncedPlugins, a)).map((b) => join(syncedPlugins, a, b)));
+  for (const p of [...installedPlugins(), ...synced2]) {
     // Read access covers just this plugin's install folder (it may live outside ~/.claude/plugins).
     const root = p;
     out.push(...skillDirs(join(p, "skills"), root));
