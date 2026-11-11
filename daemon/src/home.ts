@@ -12,6 +12,8 @@ import { Relay } from "./relay.js";
 
 const MAX_CONCURRENT_JOBS = 3;
 const HOLDER = "home";
+/** Agent transcripts (resume memory) of finished jobs are kept this long, then deleted. */
+const SESSION_KEEP_MS = 3 * 86_400_000;
 
 /** Long-running daemon on the user's PC. SPEC.md §3. */
 export async function runHome(): Promise<void> {
@@ -84,7 +86,16 @@ export async function runHome(): Promise<void> {
     // Notices Kaggle servers that idled off, so their GPU time is counted on the usage panel.
     await liveKaggleServers(relay).catch((e) => console.error("kaggle check failed", (e as Error).message));
     await checkQuotas(relay).catch((e) => console.error("quota check failed", (e as Error).message));
+    // Hourly: agent transcripts of jobs finished 3+ days ago go, so the free Upstash DB (250 MB) never fills up.
+    if (Date.now() - lastTrim > 60 * 60_000) {
+      lastTrim = Date.now();
+      await relay
+        .trimFinishedSessions(SESSION_KEEP_MS)
+        .then((n) => n && console.log(`freed agent transcripts of ${n} finished job(s)`))
+        .catch((e) => console.error("transcript trim failed", (e as Error).message));
+    }
   };
+  let lastTrim = 0;
   await sync();
   const syncTimer = setInterval(sync, 5 * 60_000);
 

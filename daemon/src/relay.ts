@@ -14,6 +14,7 @@ import {
   ProjectConfig,
   NO_PROJECT,
   scratchProject,
+  TERMINAL_STATUSES,
   type WdEvent,
   type JobStatus,
 } from "@wdash/shared";
@@ -55,6 +56,33 @@ export class Relay {
   async setStatus(id: string, status: JobStatus, extra: Record<string, string | number | undefined> = {}): Promise<void> {
     await this.updateJob(id, { status, ...extra });
     await this.emit({ jobId: id, type: "status", payload: { status, ...extra } });
+  }
+
+  /**
+   * Deletes agent session transcripts (wd:sess*, the agents' resume memory and by far the biggest keys) of jobs that
+   * finished, were cancelled or archived more than `keepMs` ago. The job's timeline, files and results stay.
+   * Returns how many jobs were trimmed.
+   */
+  async trimFinishedSessions(keepMs: number): Promise<number> {
+    const byJob = new Map<string, string[]>();
+    let cursor = "0";
+    do {
+      const [c, keys] = await this.r.scan(cursor, "MATCH", "wd:sess*:wdash-*", "COUNT", 1000);
+      cursor = c;
+      for (const k of keys) {
+        const id = k.match(/:wdash-([a-z0-9]+)-/)?.[1];
+        if (id) byJob.set(id, [...(byJob.get(id) ?? []), k]);
+      }
+    } while (cursor !== "0");
+    let trimmed = 0;
+    for (const [id, keys] of byJob) {
+      const [status, archived, updatedAt] = await this.r.hmget(K.job(id), "status", "archived", "updatedAt");
+      const finished = !status || TERMINAL_STATUSES.includes(status as JobStatus) || status === "stopped" || archived === "true";
+      if (!finished || Date.now() - Number(updatedAt ?? 0) < keepMs) continue;
+      for (let i = 0; i < keys.length; i += 100) await this.r.del(...keys.slice(i, i + 100));
+      trimmed++;
+    }
+    return trimmed;
   }
 
   /** Refresh the 90-day TTL on every key of a job. */
