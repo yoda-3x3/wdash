@@ -2,13 +2,23 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { Attention, JobRecord, RateLimitInfo } from "@wdash/shared";
 import { api, usePoll } from "@/lib/client";
 import { PAGES, slideIn, swipeTo, touchSwipeHandlers } from "@/lib/swipe";
 import { Face } from "./Face";
 import { Gestures } from "./Gestures";
 import { UpdateBanner } from "./UpdateBanner";
+import { BrowserProvider, useBrowserPane } from "./BrowserPane";
+import { Terminal } from "./Terminal";
+import { CLI_MODE, isEmbedded, useFlag } from "@/lib/prefs";
 
 export type BoardState = {
   jobs: JobRecord[];
@@ -19,80 +29,176 @@ export type BoardState = {
   now: number;
 };
 
-const Ctx = createContext<{ state: BoardState | undefined; refresh: () => void; error?: string }>({ state: undefined, refresh: () => {} });
+const Ctx = createContext<{
+  state: BoardState | undefined;
+  refresh: () => void;
+  error?: string;
+}>({ state: undefined, refresh: () => {} });
 export const useBoard = () => useContext(Ctx);
 
 const NAV = PAGES;
 
-export function Shell({ children, wide = false }: { children: React.ReactNode; wide?: boolean }) {
+export function Shell({
+  children,
+  wide = false,
+}: {
+  children: React.ReactNode;
+  wide?: boolean;
+}) {
   const { data, refresh, error } = usePoll<BoardState>("/api/state", 5000);
   const path = usePathname();
   const router = useRouter();
   const inbox = data?.attention.length ?? 0;
   const main = useRef<HTMLElement>(null);
+  const [embedded, setEmbedded] = useState(false);
+  const [cliMode] = useFlag(CLI_MODE);
+  useEffect(() => setEmbedded(isEmbedded()), []);
 
   // Arriving by a swipe: slide the new page in.
   useEffect(() => slideIn(main.current), [path]);
 
-  const touch = useMemo(() => touchSwipeHandlers((dir) => void swipeTo(router.push, location.pathname, dir)), [router]);
+  const touch = useMemo(
+    () =>
+      touchSwipeHandlers(
+        (dir) => void swipeTo(router.push, location.pathname, dir),
+      ),
+    [router],
+  );
 
   useEffect(() => {
-    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+    if ("serviceWorker" in navigator)
+      navigator.serviceWorker.register("/sw.js").catch(() => undefined);
   }, []);
 
   useEffect(() => {
-    document.title = inbox ? `(${inbox}) wdash` : "wdash";
-  }, [inbox]);
+    if (!embedded) document.title = inbox ? `(${inbox}) wdash` : "wdash";
+  }, [inbox, embedded]);
+
+  // Inside the browser pane: just the page.
+  if (embedded) {
+    return (
+      <Ctx.Provider value={{ state: data, refresh, error }}>
+        <main data-page className="px-3 pb-16 pt-3">
+          {children}
+        </main>
+      </Ctx.Provider>
+    );
+  }
+  // Settings > Look exactly like the CLI: one full-screen terminal; /exit turns it off.
+  if (cliMode) {
+    return (
+      <Ctx.Provider value={{ state: data, refresh, error }}>
+        <Terminal />
+      </Ctx.Provider>
+    );
+  }
 
   return (
     <Ctx.Provider value={{ state: data, refresh, error }}>
-      <header className="sticky top-0 z-20 border-b border-line bg-bg/90 backdrop-blur pt-[env(safe-area-inset-top)]">
-        <div className={`mx-auto flex items-center gap-3 px-4 py-2.5 ${wide ? "" : "max-w-5xl"}`}>
-          <Link href="/" className="flex items-center gap-2 font-semibold">
-            <img src="/icon.svg" alt="" className="mood-icon h-6 w-6" />
-            <span className="mood-prompt hidden sm:inline">wdash</span>
-          </Link>
-          <PcDot online={data?.home.online} />
-          <Gestures />
-          <Face />
-          {data?.paused && <span className="chip bg-warn/15 text-warn">paused</span>}
-          <nav className="ml-auto flex items-center gap-1 overflow-x-auto text-sm">
-            {NAV.map((n) => {
-              const active = n.href === "/" ? path === "/" : path.startsWith(n.href);
-              return (
-                <Link
-                  key={n.href}
-                  href={n.href}
-                  className={`relative rounded-lg px-2.5 py-1.5 ${active ? "bg-panel-2 font-medium" : "text-muted hover:text-fg"}`}
-                >
-                  {n.label}
-                  {n.href === "/inbox" && inbox > 0 && (
-                    <span className="ml-1 rounded-full bg-bad px-1.5 text-[11px] font-semibold text-white">{inbox}</span>
-                  )}
-                </Link>
-              );
-            })}
-          </nav>
+      <BrowserProvider>
+        <header className="sticky top-0 z-20 border-b border-line bg-bg/90 backdrop-blur pt-[env(safe-area-inset-top)]">
+          <div
+            className={`mx-auto flex items-center gap-3 px-4 py-2.5 ${wide ? "" : "max-w-5xl"}`}
+          >
+            <Link href="/" className="flex items-center gap-2 font-semibold">
+              <img src="/icon.svg" alt="" className="mood-icon h-6 w-6" />
+              <span className="mood-prompt hidden sm:inline">wdash</span>
+            </Link>
+            <PcDot online={data?.home.online} />
+            <Gestures />
+            <Face />
+            {data?.paused && (
+              <span className="chip bg-warn/15 text-warn">paused</span>
+            )}
+            <nav className="ml-auto flex items-center gap-1 overflow-x-auto text-sm">
+              {NAV.map((n) => {
+                const active =
+                  n.href === "/" ? path === "/" : path.startsWith(n.href);
+                return (
+                  <Link
+                    key={n.href}
+                    href={n.href}
+                    className={`relative rounded-lg px-2.5 py-1.5 ${active ? "bg-panel-2 font-medium" : "text-muted hover:text-fg"}`}
+                  >
+                    {n.label}
+                    {n.href === "/inbox" && inbox > 0 && (
+                      <span className="ml-1 rounded-full bg-bad px-1.5 text-[11px] font-semibold text-white">
+                        {inbox}
+                      </span>
+                    )}
+                  </Link>
+                );
+              })}
+            </nav>
+            <PaneButton />
+          </div>
+          <UpdateBanner />
+          {error && error !== "signed out" && (
+            <div className="bg-bad/10 px-4 py-1 text-center text-xs text-bad">
+              Can't reach wdash: {error}
+            </div>
+          )}
+        </header>
+        <div className="overflow-x-clip">
+          <main
+            ref={main}
+            data-page
+            {...touch}
+            className={`mx-auto px-4 pb-24 pt-4 ${wide ? "" : "max-w-5xl"}`}
+          >
+            {children}
+          </main>
         </div>
-        <UpdateBanner />
-        {error && error !== "signed out" && <div className="bg-bad/10 px-4 py-1 text-center text-xs text-bad">Can't reach wdash: {error}</div>}
-      </header>
-      <div className="overflow-x-clip">
-        <main ref={main} data-page {...touch} className={`mx-auto px-4 pb-24 pt-4 ${wide ? "" : "max-w-5xl"}`}>
-          {children}
-        </main>
-      </div>
+      </BrowserProvider>
     </Ctx.Provider>
   );
 }
 
-type Pong = { at: number; uptimeSec: number; jobs: number; projects: number; host: string };
+/** Shows or hides the browser pane. */
+function PaneButton() {
+  const pane = useBrowserPane();
+  if (!pane) return null;
+  return (
+    <button
+      type="button"
+      onClick={pane.toggle}
+      className={`relative shrink-0 rounded-lg px-2 py-1.5 text-sm ${pane.shown ? "bg-panel-2" : "text-muted hover:text-fg"}`}
+      title={
+        pane.shown
+          ? "Hide the browser"
+          : "Show the browser (Wall tiles open here)"
+      }
+      aria-pressed={pane.shown}
+    >
+      🌐
+      {pane.count > 0 && (
+        <span className="ml-0.5 text-[11px]">{pane.count}</span>
+      )}
+    </button>
+  );
+}
 
-const ago = (sec: number) => (sec < 120 ? `${sec}s` : sec < 7200 ? `${Math.round(sec / 60)}m` : `${Math.round(sec / 3600)}h`);
+type Pong = {
+  at: number;
+  uptimeSec: number;
+  jobs: number;
+  projects: number;
+  host: string;
+};
+
+const ago = (sec: number) =>
+  sec < 120
+    ? `${sec}s`
+    : sec < 7200
+      ? `${Math.round(sec / 60)}m`
+      : `${Math.round(sec / 3600)}h`;
 
 /** PC status chip; click it to ping the home daemon and see whether (and how fast) it answers. */
 function PcDot({ online }: { online: boolean | undefined }) {
-  const [ping, setPing] = useState<{ state: "sending" | "ok" | "none"; text: string }>();
+  const [ping, setPing] = useState<{
+    state: "sending" | "ok" | "none";
+    text: string;
+  }>();
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   if (online === undefined) return null;
 
@@ -109,12 +215,18 @@ function PcDot({ online }: { online: boolean | undefined }) {
         const { pong } = await api<{ pong: Pong | null }>(`/api/ping/${id}`);
         if (pong) {
           const secs = ((performance.now() - t0) / 1000).toFixed(1);
-          setPing({ state: "ok", text: `replied in ${secs}s · up ${ago(pong.uptimeSec)} · ${pong.jobs} job${pong.jobs === 1 ? "" : "s"}` });
+          setPing({
+            state: "ok",
+            text: `replied in ${secs}s · up ${ago(pong.uptimeSec)} · ${pong.jobs} job${pong.jobs === 1 ? "" : "s"}`,
+          });
           timer.current = setTimeout(() => setPing(undefined), 8000);
           return;
         }
       }
-      setPing({ state: "none", text: "no answer: the daemon isn't running or the PC is asleep" });
+      setPing({
+        state: "none",
+        text: "no answer: the daemon isn't running or the PC is asleep",
+      });
     } catch (e) {
       setPing({ state: "none", text: (e as Error).message });
     }
@@ -129,8 +241,12 @@ function PcDot({ online }: { online: boolean | undefined }) {
       className={`chip shrink-0 ${good ? "bg-ok/15 text-ok" : ping?.state === "none" ? "bg-bad/15 text-bad" : "bg-panel-2 text-muted"}`}
       title="Ping your PC"
     >
-      <span className={`h-1.5 w-1.5 rounded-full ${good ? "bg-ok" : ping?.state === "none" ? "bg-bad" : "bg-muted"} ${ping?.state === "sending" ? "animate-ping" : ""}`} />
-      <span className={ping ? "max-w-[55vw] truncate" : "hidden sm:inline"}>{ping ? `PC ${ping.text}` : `PC ${online ? "online" : "offline"}`}</span>
+      <span
+        className={`h-1.5 w-1.5 rounded-full ${good ? "bg-ok" : ping?.state === "none" ? "bg-bad" : "bg-muted"} ${ping?.state === "sending" ? "animate-ping" : ""}`}
+      />
+      <span className={ping ? "max-w-[55vw] truncate" : "hidden sm:inline"}>
+        {ping ? `PC ${ping.text}` : `PC ${online ? "online" : "offline"}`}
+      </span>
     </button>
   );
 }

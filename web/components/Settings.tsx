@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import type { ProjectConfig } from "@wdash/shared";
 import { api, timeAgo, usePoll } from "@/lib/client";
 import { setTechMode, useTechMode } from "@/lib/tech";
+import { CLI_MODE, useFlag } from "@/lib/prefs";
 import { WALL_STYLES, setWallStyle, useWallStyle, type WallStyle } from "@/lib/wallStyle";
 import { useBoard } from "./Shell";
 import { Usage } from "./Usage";
@@ -43,6 +44,7 @@ export function Settings({ login, vapidKey }: { login: string; vapidKey: string 
   const [push, setPush] = useState<"unsupported" | "off" | "on" | "denied" | "loading">("loading");
   const [msg, setMsg] = useState<string>();
   const tech = useTechMode();
+  const [cliMode, setCliMode] = useFlag(CLI_MODE);
   const wallStyle = useWallStyle();
 
   useEffect(() => {
@@ -88,6 +90,19 @@ export function Settings({ login, vapidKey }: { login: string; vapidKey: string 
         <h2 className="font-medium">Mood</h2>
         <MoodPicker />
         <p className="text-xs text-muted">Saved on this device.</p>
+      </section>
+
+      <section className="card space-y-2 p-4">
+        <h2 className="font-medium">Look exactly like the CLI</h2>
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={cliMode} onChange={(e) => setCliMode(e.target.checked)} />
+          <span>
+            Full immersion: the whole site becomes one Claude Code terminal
+            <span className="block text-xs text-muted">
+              Everything is a command: /jobs, /open 1, /chat, /new, /inbox, /allow, /skills, /help. Type plain text to talk to the open job. Type <code>/exit</code> to come back here. Saved on this device.
+            </span>
+          </span>
+        </label>
       </section>
 
       <section className="card space-y-2 p-4">

@@ -8,6 +8,7 @@ import { api, usd } from "@/lib/client";
 import { setTechMode, useTechMode } from "@/lib/tech";
 import { WALL_STYLES, setWallStyle, useWallStyle, type WallStyle } from "@/lib/wallStyle";
 import { ArcadeScene } from "./Arcade";
+import { openInPane, useBrowserPane } from "./BrowserPane";
 import { useBoard } from "./Shell";
 
 // The wall: every agent across every live job as a terminal tile streaming its output.
@@ -278,6 +279,7 @@ function Tile({
 }) {
   const body = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const pane = useBrowserPane();
   const needsYou = attention.length > 0;
   const dim = ["done", "stopped"].includes(agent.status);
 
@@ -296,7 +298,12 @@ function Tile({
       data-href={`/jobs/${job.id}`}
       data-label={`${agent.id} · ${job.title.slice(0, 40)}`}
     >
-      <Link href={`/jobs/${job.id}`} className="flex items-center gap-1.5 border-b border-[#1f242c] bg-[#0f1216] px-2 py-1 hover:bg-[#151a20]">
+      <Link
+        href={`/jobs/${job.id}`}
+        onClick={openInPane(pane, `/jobs/${job.id}`, `${agent.id} · ${job.title.slice(0, 24)}`)}
+        title="Open in the browser pane (Ctrl/⌘-click for the full page)"
+        className="flex items-center gap-1.5 border-b border-[#1f242c] bg-[#0f1216] px-2 py-1 hover:bg-[#151a20]"
+      >
         {n && (
           <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-[#2a2f39] text-[10px] font-semibold text-[#d6dae0]" title={`Hold up ${n} finger${n === 1 ? "" : "s"} to open`}>
             {n}
